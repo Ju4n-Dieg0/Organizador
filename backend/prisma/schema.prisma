@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+}
+
+model Plan {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  clients     Client[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Client {
+  id         Int               @id @default(autoincrement())
+  name       String
+  active     Boolean           @default(true)
+  planId     Int?
+  plan       Plan?             @relation(fields: [planId], references: [id], onDelete: SetNull)
+  driveLinks ClientDriveLink[]
+  tasks      Task[]
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
+model ClientDriveLink {
+  id       Int     @id @default(autoincrement())
+  url      String
+  label    String?
+  clientId Int
+  client   Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model TeamMember {
+  id             Int            @id @default(autoincrement())
+  name           String
+  telegramChatId String?        @unique
+  active         Boolean        @default(true)
+  assignments    TaskAssignee[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+enum TaskStatus {
+  PENDIENTE
+  ASIGNADO
+  TERMINADO
+  EXTENDIDO
+}
+
+enum TaskEventType {
+  CREACION
+  ASIGNACION
+  REASIGNACION
+  EXTENSION
+  CAMBIO_ESTADO
+}
+
+model Task {
+  id          Int            @id @default(autoincrement())
+  title       String
+  description String?
+  status      TaskStatus     @default(PENDIENTE)
+  dueDate     DateTime?
+  clientId    Int
+  client      Client         @relation(fields: [clientId], references: [id])
+  links       TaskLink[]
+  assignees   TaskAssignee[]
+  events      TaskEvent[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([status])
+  @@index([clientId])
+  @@index([dueDate])
+}
+
+model TaskLink {
+  id     Int     @id @default(autoincrement())
+  url    String
+  label  String?
+  taskId Int
+  task   Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model TaskAssignee {
+  taskId     Int
+  memberId   Int
+  assignedAt DateTime   @default(now())
+  task       Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  member     TeamMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, memberId])
+}
+
+model TaskEvent {
+  id         Int           @id @default(autoincrement())
+  type       TaskEventType
+  fromStatus TaskStatus?
+  toStatus   TaskStatus?
+  reason     String?
+  detail     String?
+  taskId     Int
+  task       Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdAt  DateTime      @default(now())
+
+  @@index([taskId])
+}

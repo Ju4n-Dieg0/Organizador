@@ -1,0 +1,141 @@
+/*
+ * Variables CSS espejo de src/theme/tokens.ts (design-system v2 "Midnight Glass").
+ * Mantener sincronizadas: la fuente de verdad es theme/tokens.ts.
+ */
+:root {
+  --bg-deep: #020203;
+  --bg-base: #0a0a0f;
+  --bg-elevated: #101016;
+  --surface-glass: rgba(255, 255, 255, 0.04);
+  --surface-glass-hover: rgba(255, 255, 255, 0.07);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --text: #ededef;
+  --text-muted: #8a8f98;
+  --accent: #6e79f4;
+  --accent-glow: rgba(110, 121, 244, 0.25);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg-base);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Foco visible para navegación por teclado (a11y) */
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Elementos clicables siempre con cursor pointer */
+button,
+a {
+  cursor: pointer;
+}
+
+/* Scrollbar discreta acorde al tema */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-glass-hover);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Números, IDs y fechas con dígitos tabulares */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Headers de tabla densa: 12px uppercase muted (MASTER §Componentes clave) */
+.ant-table-thead > tr > th,
+.ant-table-thead > tr > td {
+  font-size: 12px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600 !important;
+}
+.ant-table,
+.ant-table-container,
+.ant-table-content {
+  background: transparent !important;
+}
+.ant-table-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Items del dock flotante: hover sin mover layout, press scale */
+.dock-item {
+  transition:
+    color 0.26s var(--ease-out-expo),
+    background-color 0.26s var(--ease-out-expo),
+    transform 0.26s var(--ease-out-expo);
+}
+.dock-item:not(.dock-item-active):hover {
+  color: var(--text) !important;
+  background: var(--surface-glass-hover) !important;
+}
+.dock-item:active {
+  transform: scale(0.97);
+}
+
+/* Botón primario pill con glow en hover; press scale (MASTER §Motion) */
+.ant-btn-primary {
+  transition:
+    box-shadow 0.26s var(--ease-out-expo),
+    transform 0.26s var(--ease-out-expo),
+    background-color 0.26s var(--ease-out-expo);
+}
+.ant-btn-primary:hover {
+  box-shadow: 0 0 24px var(--accent-glow);
+}
+.ant-btn:active {
+  transform: scale(0.97);
+}
+
+/* Overlay de modal/drawer con blur (elemento fijo: blur permitido) */
+.ant-modal-mask,
+.ant-drawer-mask {
+  backdrop-filter: blur(8px);
+}
+
+/* Inputs: ring de acento en focus */
+.ant-input:focus,
+.ant-input-focused,
+.ant-input-affix-wrapper-focused,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  box-shadow: 0 0 0 3px var(--accent-glow) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
