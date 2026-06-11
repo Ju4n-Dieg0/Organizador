@@ -9,6 +9,7 @@ import { Telegraf } from 'telegraf';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramSender } from '../notifications/telegram-sender.interface';
 import { TelegramCommandsService } from './telegram-commands.service';
+import { TelegramConversationService } from './telegram-conversation.service';
 
 @Injectable()
 export class TelegramService
@@ -20,6 +21,7 @@ export class TelegramService
   constructor(
     private readonly config: ConfigService,
     private readonly commandsService: TelegramCommandsService,
+    private readonly conversationService: TelegramConversationService,
     private readonly notificationsService: NotificationsService,
   ) {}
 
@@ -34,6 +36,8 @@ export class TelegramService
 
     this.bot = new Telegraf(token);
     this.commandsService.register(this.bot);
+    // Después de los comandos: el middleware de dueño ya cubre el texto libre.
+    this.conversationService.register(this.bot);
     this.notificationsService.setSender(this);
 
     // launch() solo resuelve cuando el bot se detiene: no se espera.

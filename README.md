@@ -43,6 +43,46 @@ Login web: `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` del `backend/.env`.
 
 Sin token configurado, el bot y los recordatorios se desactivan solos y la web funciona normal.
 
+## Bot conversacional (LM Studio)
+
+Además de los comandos slash, el bot entiende **lenguaje natural** (solo desde el chat del dueño):
+escribe lo que necesitas y un LLM local vía [LM Studio](https://lmstudio.ai) lo transforma en una
+intención estructurada que se ejecuta con la misma lógica de negocio que los comandos (historial
+`TaskEvent`, razones obligatorias para reasignar/extender, validación de transiciones).
+
+### Configurar LM Studio
+
+1. Instala LM Studio y descarga un modelo con buen soporte de instrucciones en español
+   (p. ej. un Llama 3.1 8B Instruct o Qwen 2.5 7B Instruct).
+2. Arranca el servidor local: pestaña **Developer → Start Server** (por defecto `http://localhost:1234`).
+3. En `backend/.env`:
+
+   ```
+   LMSTUDIO_BASE_URL=http://localhost:1234/v1
+   LMSTUDIO_MODEL=nombre-del-modelo-cargado
+   ```
+
+Sin `LMSTUDIO_BASE_URL`, el modo conversacional se desactiva solo (el backend arranca igual y los
+comandos slash siguen funcionando); el bot responde a texto libre indicando que el modo no está
+disponible y sugiere `/ayuda`.
+
+### Ejemplos de frases y su comando equivalente
+
+| Frase en lenguaje natural | Comando equivalente |
+|---------------------------|---------------------|
+| "crea un pendiente para Acme: subir el reel del viernes" | `/pendiente Acme \| Subir el reel del viernes` |
+| "asigna el 12 a Ana y Luis para el 20 de junio" | `/asignar 12 \| Ana, Luis \| 2026-06-20` |
+| "reasigna el 12 a Marta porque Ana está de vacaciones" | `/reasignar 12 \| Marta \| Ana está de vacaciones` |
+| "extiende el 12 al 25 de junio porque el cliente pidió cambios" | `/extender 12 \| 2026-06-25 \| Cliente pidió cambios` |
+| "termina el 12" / "el 12 ya quedó" | `/terminar 12` |
+| "¿qué pendientes tiene Acme?" | `/pendientes Acme` |
+| "muéstrame los clientes" | `/clientes` |
+| "¿quiénes están en el equipo?" | `/personas` |
+
+Si falta un dato obligatorio (p. ej. extender sin razón), el bot responde qué falta y cómo
+reformular; el siguiente mensaje puede aportar solo el dato faltante y se completa la operación.
+La ejecución siempre pasa por una intención JSON validada: nada se ejecuta si es ambiguo.
+
 ## Documentación
 
 - Contrato API y dominio: [docs/SPEC.md](docs/SPEC.md)

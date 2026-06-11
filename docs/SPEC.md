@@ -114,6 +114,63 @@ Notificaciones salientes (vía `NotificationsService`):
 - Recordatorios: cron `REMINDER_CRON` (default `0 9 * * *`): tareas ASIGNADO/EXTENDIDO con
   `dueDate` vencida, de hoy o de mañana → resumen al dueño + alerta a cada asignado.
 
+## IA conversacional (LM Studio)
+
+El bot acepta **texto libre** (sin slash) SOLO del chat del dueño. El texto se interpreta con
+LM Studio (API compatible OpenAI, `POST {LMSTUDIO_BASE_URL}/chat/completions`) y se transforma
+en una intención estructurada que se ejecuta contra los services existentes (misma lógica de
+negocio que los comandos: TaskEvent, razones obligatorias, transiciones validadas).
+
+### Contrato del módulo `backend/src/ai/`
+
+- `ai/` NO toca Prisma ni repositorios: recibe el contexto desde quien lo invoca.
+- Si falta `LMSTUDIO_BASE_URL`, el módulo se desactiva (`isEnabled() === false`) sin romper el arranque.
+
+```ts
+interface AiContext {
+  clients: { id: number; name: string }[];   // activos, para normalizar nombres
+  members: { id: number; name: string }[];   // activos
+  today: string;                              // YYYY-MM-DD (resolver fechas relativas)
+}
+
+// Campos no identificadores son opcionales: el LLM puede omitirlos y el bot pide lo que falte.
+type AiIntent =
+  | { operation: 'crear_pendiente'; clientName?: string; title?: string; links?: string[] }
+  | { operation: 'asignar'; taskId?: number; memberNames?: string[]; dueDate?: string }      // YYYY-MM-DD
+  | { operation: 'reasignar'; taskId?: number; memberNames?: string[]; reason?: string }
+  | { operation: 'extender'; taskId?: number; newDueDate?: string; reason?: string }
+  | { operation: 'terminar'; taskId?: number }
+  | { operation: 'cambiar_estado'; taskId?: number; status?: TaskStatus; reason?: string }
+  | { operation: 'listar_pendientes'; clientName?: string }
+  | { operation: 'listar_clientes' }
+  | { operation: 'listar_personas' }
+  | { operation: 'ayuda' }
+  | { operation: 'desconocida' };
+
+type AiIntentResult =
+  | { kind: 'intent'; intent: AiIntent }
+  | { kind: 'unknown' }    // el modelo no entendió la petición
+  | { kind: 'error' };     // LM Studio inaccesible o JSON malformado tras 1 reintento
+
+interface AiService {
+  isEnabled(): boolean;
+  interpret(text: string, context: AiContext): Promise<AiIntentResult>;
+}
+```
+
+Implementación: `fetch` nativo (sin dependencias nuevas) con salida JSON forzada
+(`response_format: json_schema`, fallback a prompt estricto + validación) y 1 reintento.
+
+### Reglas del handler de texto libre (Telegram)
+
+- Misma restricción de seguridad que los comandos (`TELEGRAM_OWNER_CHAT_ID`); los textos que
+  empiezan con `/` no pasan por la IA.
+- Resolución de nombres → IDs SIEMPRE vía los helpers existentes del bot (manejo de ambigüedad).
+- La ejecución pasa por los services existentes; cero lógica de negocio duplicada.
+- Datos faltantes (p. ej. extender sin razón) → el bot responde qué falta, no ejecuta.
+- `unknown`/`desconocida` → respuesta amable sugiriendo /ayuda. IA desactivada → aviso de que
+  el modo conversacional no está disponible + sugerencia de /ayuda.
+
 ## Variables de entorno (backend/.env)
 
 ```
@@ -128,6 +185,8 @@ DEFAULT_ADMIN_NAME=Admin
 TELEGRAM_BOT_TOKEN=          # vacío = bot y recordatorios desactivados
 TELEGRAM_OWNER_CHAT_ID=
 REMINDER_CRON=0 9 * * *
+LMSTUDIO_BASE_URL=          # vacío = modo conversacional desactivado (ej: http://localhost:1234/v1)
+LMSTUDIO_MODEL=             # nombre del modelo cargado en LM Studio
 ```
 
 Frontend: `VITE_API_URL=http://localhost:3000/api` (`frontend/.env`).

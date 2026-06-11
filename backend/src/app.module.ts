@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
+import { AiModule } from './ai/ai.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { ClientsModule } from './clients/clients.module';
@@ -26,6 +27,7 @@ import { TelegramModule } from './telegram/telegram.module';
     TeamMembersModule,
     TasksModule,
     NotificationsModule,
+    AiModule,
     TelegramModule,
     RemindersModule,
   ],
