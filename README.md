@@ -89,4 +89,3 @@ La ejecución siempre pasa por una intención JSON validada: nada se ejecuta si 
 - Convenciones y arquitectura: [CLAUDE.md](CLAUDE.md)
 - Design system: [design-system/organizador/MASTER.md](design-system/organizador/MASTER.md)
 - Agentes de Claude Code: [.claude/agents/](.claude/agents/)
-# Organizador

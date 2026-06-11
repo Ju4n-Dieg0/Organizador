@@ -10,6 +10,7 @@ con bot de Telegram para operar pendientes por comandos y recibir recordatorios.
 | Backend | NestJS 11 + TypeScript, Prisma ORM, PostgreSQL |
 | Frontend | React 19 + Vite + TypeScript, Ant Design 5, Framer Motion, TanStack Query |
 | Bot | Telegraf (long polling) integrado en el backend NestJS |
+| IA | LM Studio local (API compatible OpenAI) para el modo conversacional del bot |
 | Auth | JWT, usuario admin por defecto sembrado desde variables de entorno |
 | Infra | docker-compose (PostgreSQL) |
 
@@ -59,7 +60,8 @@ src/<modulo>/
 Reglas:
 - Los controllers NUNCA usan PrismaService ni tipos de Prisma; solo DTOs.
 - Los services NUNCA llaman a Prisma directo; siempre vía repository.
-- `notifications/` abstrae el envío a Telegram (interfaz `Notifier`); `telegram/` implementa bot + comandos; `reminders/` cron de recordatorios.
+- `notifications/` abstrae el envío a Telegram (interfaz `Notifier`); `telegram/` implementa bot + comandos + modo conversacional; `reminders/` cron de recordatorios.
+- `ai/` integra LM Studio (texto libre → intención estructurada `AiIntent`); NO toca Prisma: recibe el contexto desde quien lo invoca. Contrato en `docs/SPEC.md`.
 - Auth global con `JwtAuthGuard` + decorador `@Public()` para login/health.
 
 ### Frontend (`frontend/`) — 4 capas: api → service → hook → component
@@ -100,6 +102,10 @@ Para decisiones de UI/UX usa la skill `/ui-ux-pro-max`.
 - **Telegram**: solo el chat del dueño (`TELEGRAM_OWNER_CHAT_ID`) ejecuta comandos
   (`/pendiente`, `/asignar`, `/reasignar`, `/estado`, `/extender`, `/terminar`, `/pendientes`, `/clientes`, `/personas`, `/ayuda`).
   Los chats del equipo SOLO reciben alertas y recordatorios (cron `REMINDER_CRON`, default 9:00).
+  El chat del dueño también acepta **texto libre** (modo conversacional): el módulo `ai/` lo
+  interpreta con LM Studio y lo ejecuta contra los services existentes (misma lógica de negocio,
+  mismos `TaskEvent` y razones obligatorias). Si falta `LMSTUDIO_BASE_URL`, el modo se desactiva
+  solo y el bot sugiere `/ayuda`.
 
 Contrato API completo: `docs/SPEC.md`. Schema: `backend/prisma/schema.prisma`.
 
@@ -118,5 +124,7 @@ Usa los subagentes de `.claude/agents/` para trabajo por área; `orquestador` co
 ## Variables de entorno (backend/.env)
 
 Ver `backend/.env.example`: `DATABASE_URL`, `JWT_SECRET`, `DEFAULT_ADMIN_EMAIL`,
-`DEFAULT_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID`, `REMINDER_CRON`, `CORS_ORIGIN`.
-El bot y los recordatorios se desactivan solos si falta `TELEGRAM_BOT_TOKEN` (no rompe el arranque).
+`DEFAULT_ADMIN_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID`, `REMINDER_CRON`, `CORS_ORIGIN`,
+`LMSTUDIO_BASE_URL` (ej. `http://localhost:1234/v1`), `LMSTUDIO_MODEL`.
+El bot y los recordatorios se desactivan solos si falta `TELEGRAM_BOT_TOKEN`; el modo conversacional
+se desactiva solo si falta `LMSTUDIO_BASE_URL` (nada rompe el arranque).
