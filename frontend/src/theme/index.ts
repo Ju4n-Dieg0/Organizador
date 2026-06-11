@@ -101,6 +101,9 @@ export const themeConfig: ThemeConfig = {
     },
     Tooltip: {
       colorBgSpotlight: colors.bgElevated,
+      // El texto del tooltip usa colorTextLightSolid, que globalmente es
+      // oscuro (onAccent) para botones sobre accent; aquí debe ser claro.
+      colorTextLightSolid: colors.text,
     },
     Popconfirm: {
       colorBgElevated: colors.bgElevated,
