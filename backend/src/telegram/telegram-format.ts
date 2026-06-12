@@ -108,6 +108,13 @@ export function formatOpenTasks(
   return `<b>${title}</b>\n${tasks.map((t) => taskLine(t)).join('\n')}`;
 }
 
+/** Lista en lenguaje natural: "Ana", "Ana y Luis", "Ana, Luis y Marta". */
+export function humanList(items: string[]): string {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  return `${items.slice(0, -1).join(', ')} y ${items[items.length - 1]}`;
+}
+
 export function httpMessage(err: HttpException): string {
   const res = err.getResponse();
   if (typeof res === 'string') return res;

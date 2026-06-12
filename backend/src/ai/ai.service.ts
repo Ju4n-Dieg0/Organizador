@@ -8,13 +8,23 @@ import {
   AiIntentResult,
   AiOperation,
 } from './ai-intent.types';
+import {
+  buildSystemPrompt,
+  ChatMessage,
+  FEW_SHOT_MESSAGES,
+  INTENTS_JSON_SCHEMA,
+} from './ai-prompt';
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_TOKENS = 600;
+/** Corta los divagues de phi-3: los shots son JSON de una sola línea. */
+const STOP_SEQUENCES = ['\n\n'];
+const MAX_INTENTS = 5;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Campos permitidos por operación; todo lo demás se descarta. */
 const OPERATION_FIELDS: Record<AiOperation, string[]> = {
-  crear_pendiente: ['clientName', 'title', 'links'],
+  crear_pendiente: ['clientName', 'title', 'links', 'memberNames', 'dueDate'],
   asignar: ['taskId', 'memberNames', 'dueDate'],
   reasignar: ['taskId', 'memberNames', 'reason'],
   extender: ['taskId', 'newDueDate', 'reason'],
@@ -24,36 +34,20 @@ const OPERATION_FIELDS: Record<AiOperation, string[]> = {
   listar_clientes: [],
   listar_personas: [],
   ayuda: [],
+  charla: [],
   desconocida: [],
 };
 
-/** JSON Schema para `response_format.json_schema` de LM Studio. */
-const INTENT_JSON_SCHEMA = {
-  name: 'ai_intent',
-  strict: true,
-  schema: {
-    type: 'object',
-    properties: {
-      operation: { type: 'string', enum: [...AI_OPERATIONS] },
-      clientName: { type: 'string' },
-      title: { type: 'string' },
-      links: { type: 'array', items: { type: 'string' } },
-      taskId: { type: 'integer' },
-      memberNames: { type: 'array', items: { type: 'string' } },
-      dueDate: { type: 'string' },
-      newDueDate: { type: 'string' },
-      status: { type: 'string', enum: [...TASK_STATUSES] },
-      reason: { type: 'string' },
-    },
-    required: ['operation'],
-    additionalProperties: false,
-  },
+/** Estados en inglés que phi-3 devuelve a veces → enum del dominio. */
+const STATUS_SYNONYMS: Record<string, string> = {
+  PENDING: 'PENDIENTE',
+  ASSIGNED: 'ASIGNADO',
+  DONE: 'TERMINADO',
+  COMPLETED: 'TERMINADO',
+  FINISHED: 'TERMINADO',
+  TERMINATED: 'TERMINADO',
+  EXTENDED: 'EXTENDIDO',
 };
-
-interface ChatMessage {
-  role: 'system' | 'user';
-  content: string;
-}
 
 type CompletionResult =
   | { status: 'ok'; content: string }
@@ -73,12 +67,17 @@ export class AiService {
   }
 
   /**
-   * Interpreta texto libre del dueño y lo convierte en una intención estructurada.
+   * Interpreta texto libre del dueño como una LISTA de intenciones.
    *
-   * El caller debe consultar `isEnabled()` antes de llamar: si el módulo está
-   * desactivado (falta `LMSTUDIO_BASE_URL`) este método devuelve `{ kind: 'error' }`.
-   * Nunca lanza: errores de red, timeout o JSON malformado (tras 1 reintento)
-   * se loguean y devuelven `{ kind: 'error' }`.
+   * Estrategia calibrada contra phi-3-mini:
+   * 1. Intento SIN `response_format` (few-shot + stop + temperature 0): es el
+   *    que produce mejor calidad, pero a veces responde prosa sin JSON.
+   * 2. Reintento CON `response_format.json_schema` (strict): degrada la
+   *    calidad pero garantiza JSON parseable; si el servidor rechaza el
+   *    schema (4xx) se reintenta sin él.
+   *
+   * Nunca lanza: errores de red, timeout o JSON inservible tras ambos
+   * intentos se loguean y devuelven `{ kind: 'error' }`.
    */
   async interpret(text: string, context: AiContext): Promise<AiIntentResult> {
     if (!this.isEnabled()) {
@@ -89,45 +88,36 @@ export class AiService {
     }
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: this.buildSystemPrompt(context) },
+      { role: 'system', content: buildSystemPrompt(context) },
+      ...FEW_SHOT_MESSAGES,
       { role: 'user', content: text },
     ];
 
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const content = await this.getCompletion(messages);
-      if (content === null) {
-        return { kind: 'error' };
-      }
-
-      const intent = this.parseAndValidate(content);
-      if (intent !== null) {
-        if (intent.operation === 'desconocida') {
-          return { kind: 'unknown' };
-        }
-        return { kind: 'intent', intent };
-      }
-
-      this.logger.warn(
-        `Respuesta de LM Studio sin intención válida (intento ${attempt} de 2)`,
-      );
+    // Intento 1: sin salida estructurada (mejor calidad con phi-3-mini).
+    const first = await this.requestCompletion(messages, false);
+    if (first.status !== 'ok') {
+      return { kind: 'error' };
     }
+    const firstResult = this.toResult(first.content, context);
+    if (firstResult !== null) {
+      return firstResult;
+    }
+    this.logger.warn(
+      'Respuesta de LM Studio sin intenciones utilizables: se reintenta con json_schema',
+    );
 
-    return { kind: 'error' };
-  }
-
-  /**
-   * Llama a LM Studio forzando salida JSON; si el servidor rechaza
-   * `response_format` (4xx), reintenta una vez sin él confiando en el prompt.
-   */
-  private async getCompletion(messages: ChatMessage[]): Promise<string | null> {
-    let result = await this.requestCompletion(messages, true);
-    if (result.status === 'schema_rejected') {
+    // Intento 2: con json_schema estricto (garantiza JSON parseable).
+    let second = await this.requestCompletion(messages, true);
+    if (second.status === 'schema_rejected') {
       this.logger.warn(
         'LM Studio rechazó response_format.json_schema: se reintenta sin salida estructurada',
       );
-      result = await this.requestCompletion(messages, false);
+      second = await this.requestCompletion(messages, false);
     }
-    return result.status === 'ok' ? result.content : null;
+    if (second.status !== 'ok') {
+      return { kind: 'error' };
+    }
+    return this.toResult(second.content, context) ?? { kind: 'error' };
   }
 
   private async requestCompletion(
@@ -143,12 +133,15 @@ export class AiService {
       model,
       messages,
       temperature: 0,
+      max_tokens: MAX_TOKENS,
     };
     if (withJsonSchema) {
       body.response_format = {
         type: 'json_schema',
-        json_schema: INTENT_JSON_SCHEMA,
+        json_schema: INTENTS_JSON_SCHEMA,
       };
+    } else {
+      body.stop = STOP_SEQUENCES;
     }
 
     try {
@@ -200,29 +193,158 @@ export class AiService {
   }
 
   /**
-   * Parsea el contenido del modelo (tolerando fences ```json) y valida la
-   * intención: operación dentro de la lista y tipos correctos por campo.
-   * Campos extra o con tipo inválido se descartan (quedarán undefined y el
-   * bot pedirá el dato). Devuelve null si no hay JSON u operación válida.
+   * Convierte la respuesta cruda del modelo en un `AiIntentResult`.
+   * Devuelve null si no se extrajo NINGUNA intención (dispara el reintento).
+   * Con ≥1 intención: filtra charla/desconocida si hay otras ejecutables;
+   * todas charla → smalltalk; todas desconocida → unknown.
    */
-  private parseAndValidate(content: string): AiIntent | null {
+  private toResult(content: string, context: AiContext): AiIntentResult | null {
+    const intents = this.collectIntents(content, context);
+    if (intents === null || intents.length === 0) {
+      return null;
+    }
+
+    const executable = intents.filter(
+      (i) => i.operation !== 'charla' && i.operation !== 'desconocida',
+    );
+    if (executable.length > 0) {
+      return { kind: 'intents', intents: executable };
+    }
+    if (intents.some((i) => i.operation === 'charla')) {
+      return { kind: 'smalltalk' };
+    }
+    return { kind: 'unknown' };
+  }
+
+  /**
+   * Extrae y normaliza la lista de intenciones del contenido del modelo.
+   * Acepta `{"intents":[...]}`, un objeto suelto con `operation` (se envuelve
+   * como lista de 1) o un array de objetos. Máximo MAX_INTENTS intenciones.
+   * Devuelve null si no hay JSON con esa forma.
+   */
+  private collectIntents(content: string, context: AiContext): AiIntent[] | null {
     const raw = this.parseJson(content);
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+
+    let items: unknown[];
+    if (Array.isArray(raw)) {
+      items = raw;
+    } else if (typeof raw === 'object' && raw !== null) {
+      const candidate = raw as Record<string, unknown>;
+      if (Array.isArray(candidate.intents)) {
+        items = candidate.intents;
+      } else if ('operation' in candidate) {
+        items = [candidate];
+      } else {
+        return null;
+      }
+    } else {
       return null;
     }
 
-    const candidate = raw as Record<string, unknown>;
-    const operation = candidate.operation;
-    if (
-      typeof operation !== 'string' ||
-      !(AI_OPERATIONS as readonly string[]).includes(operation)
-    ) {
+    const intents: AiIntent[] = [];
+    for (const item of items.slice(0, MAX_INTENTS)) {
+      const intent = this.normalizeIntent(item, context.today);
+      if (intent !== null) {
+        if (intent.operation === 'crear_pendiente') {
+          this.resolveClientFromTitle(intent, context);
+        }
+        intents.push(intent);
+      }
+    }
+    return intents;
+  }
+
+  /**
+   * Post-procesado determinista de `crear_pendiente`: phi-3 a veces deja el
+   * cliente DENTRO del título ("...para el cliente ToGrow") sin `clientName`.
+   *
+   * - Sin `clientName`: si EXACTAMENTE un cliente activo del contexto aparece
+   *   como substring del título (comparación NFD sin diacríticos, lowercase),
+   *   se asigna su nombre real y se limpia el sufijo que lo menciona.
+   * - Con `clientName`: solo se limpia el sufijo si el título termina
+   *   mencionando ese mismo cliente.
+   * - Si ningún cliente del contexto aparece, la intención queda intacta
+   *   (el bot preguntará el cliente). Si al limpiar el título quedara vacío,
+   *   se conserva el título original.
+   */
+  private resolveClientFromTitle(
+    intent: AiIntent & { operation: 'crear_pendiente' },
+    context: AiContext,
+  ): void {
+    if (typeof intent.title !== 'string' || intent.title.length === 0) {
+      return;
+    }
+
+    let clientName = intent.clientName;
+    if (clientName === undefined) {
+      const normalizedTitle = this.normalizeText(intent.title);
+      const matches = context.clients.filter((c) =>
+        normalizedTitle.includes(this.normalizeText(c.name)),
+      );
+      if (matches.length !== 1) {
+        return;
+      }
+      clientName = matches[0].name;
+      intent.clientName = clientName;
+    }
+
+    const cleaned = this.stripClientSuffix(intent.title, clientName);
+    if (cleaned.length > 0) {
+      intent.title = cleaned;
+    }
+  }
+
+  /**
+   * Elimina del final del título la mención al cliente con patrones tipo
+   * "para/de/del [el cliente] <nombre>". Trabaja sobre el título normalizado
+   * (NFD sin diacríticos, lowercase) y recorta el original por índice: la
+   * normalización por carácter preserva longitudes en texto español, y si
+   * no las preservara se devuelve el título intacto (nunca se corrompe).
+   */
+  private stripClientSuffix(title: string, clientName: string): string {
+    const normalizedTitle = this.normalizeText(title);
+    if (normalizedTitle.length !== title.length) {
+      return title;
+    }
+    const escapedClient = this.escapeRegExp(this.normalizeText(clientName));
+    const suffixPattern = new RegExp(
+      `\\s*(?:para|de|del)\\s+(?:el\\s+cliente\\s+)?${escapedClient}\\s*$`,
+      'i',
+    );
+    const match = suffixPattern.exec(normalizedTitle);
+    if (match === null) {
+      return title;
+    }
+    return title.slice(0, match.index).trim();
+  }
+
+  /** Normalización para comparar nombres: NFD sin diacríticos + lowercase. */
+  private normalizeText(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
+
+  /** Escapa caracteres especiales de regex en un literal. */
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /** Normaliza un elemento crudo a AiIntent; null si no tiene operación. */
+  private normalizeIntent(item: unknown, today: string): AiIntent | null {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return null;
+    }
+    const candidate = item as Record<string, unknown>;
+    if (typeof candidate.operation !== 'string') {
       return null;
     }
 
+    const operation = this.normalizeOperation(candidate.operation);
     const intent: Record<string, unknown> = { operation };
-    for (const field of OPERATION_FIELDS[operation as AiOperation]) {
-      const value = this.sanitizeField(field, candidate[field]);
+    for (const field of OPERATION_FIELDS[operation]) {
+      const value = this.sanitizeField(field, candidate[field], today);
       if (value !== undefined) {
         intent[field] = value;
       }
@@ -230,45 +352,97 @@ export class AiService {
     return intent as AiIntent;
   }
 
-  /** Valida el tipo de un campo; devuelve undefined si es inválido o falta. */
-  private sanitizeField(field: string, value: unknown): unknown {
+  /**
+   * Normaliza el nombre de operación: phi-3 inventa variantes
+   * (`gracias`, `terminar_pendiente`, `marcar_como`, `obtener_clientes`,
+   * `actualizar_fecha`, `consulta_pendiente`, `fin_periodo`...).
+   * El orden importa: las reglas más específicas van primero.
+   */
+  private normalizeOperation(raw: string): AiOperation {
+    const op = raw.trim().toLowerCase();
+    if ((AI_OPERATIONS as readonly string[]).includes(op)) {
+      return op as AiOperation;
+    }
+
+    const has = (...needles: string[]) => needles.some((n) => op.includes(n));
+    if (has('reasign')) return 'reasignar';
+    if (has('crear', 'nuevo') && op.includes('pendiente')) {
+      return 'crear_pendiente';
+    }
+    if (has('asign')) return 'asignar';
+    if (has('extend', 'prorrog', 'actualizar_fecha', 'cambiar_fecha')) {
+      return 'extender';
+    }
+    if (has('termin', 'finaliz', 'complet', 'fin_')) return 'terminar';
+    if (has('estado', 'marcar')) return 'cambiar_estado';
+    if (has('consulta', 'pendiente')) return 'listar_pendientes';
+    if (has('cliente')) return 'listar_clientes';
+    if (has('persona', 'equipo', 'miembro')) return 'listar_personas';
+    if (has('ayuda', 'help')) return 'ayuda';
+    if (has('charla', 'gracias', 'salud', 'hola', 'small')) return 'charla';
+    return 'desconocida';
+  }
+
+  /**
+   * Valida y coerciona el tipo de un campo; undefined si es inválido o falta.
+   * Tolerancias: taskId acepta string numérica; status acepta lowercase y
+   * variantes en inglés; memberNames/links aceptan una string suelta.
+   * Fechas anteriores a hoy se descartan: el fallback con json_schema a veces
+   * inventa fechas pasadas (mejor que el bot pregunte a ejecutar un invento).
+   */
+  private sanitizeField(field: string, value: unknown, today: string): unknown {
     if (value === undefined || value === null) return undefined;
     switch (field) {
-      case 'taskId':
-        return typeof value === 'number' &&
-          Number.isInteger(value) &&
-          value > 0
-          ? value
-          : undefined;
+      case 'taskId': {
+        if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+          return value;
+        }
+        if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+          const parsed = Number.parseInt(value.trim(), 10);
+          return parsed > 0 ? parsed : undefined;
+        }
+        return undefined;
+      }
       case 'dueDate':
-      case 'newDueDate':
-        return typeof value === 'string' && DATE_REGEX.test(value)
-          ? value
-          : undefined;
+      case 'newDueDate': {
+        if (typeof value !== 'string') return undefined;
+        const date = value.trim();
+        if (!DATE_REGEX.test(date)) return undefined;
+        // YYYY-MM-DD compara bien lexicográficamente.
+        if (DATE_REGEX.test(today) && date < today) return undefined;
+        return date;
+      }
       case 'memberNames':
-      case 'links':
-        return Array.isArray(value) &&
-          value.length > 0 &&
-          value.every((v) => typeof v === 'string' && v.trim().length > 0)
-          ? value
-          : undefined;
-      case 'status':
-        return typeof value === 'string' &&
-          (TASK_STATUSES as readonly string[]).includes(value)
-          ? value
-          : undefined;
+      case 'links': {
+        const list =
+          typeof value === 'string' ? [value] : Array.isArray(value) ? value : null;
+        if (list === null) return undefined;
+        const cleaned = list.filter(
+          (v): v is string => typeof v === 'string' && v.trim().length > 0,
+        );
+        return cleaned.length > 0 ? cleaned : undefined;
+      }
+      case 'status': {
+        if (typeof value !== 'string') return undefined;
+        const upper = value.trim().toUpperCase();
+        if ((TASK_STATUSES as readonly string[]).includes(upper)) return upper;
+        return STATUS_SYNONYMS[upper];
+      }
       case 'clientName':
       case 'title':
       case 'reason':
         return typeof value === 'string' && value.trim().length > 0
-          ? value
+          ? value.trim()
           : undefined;
       default:
         return undefined;
     }
   }
 
-  /** Parsea JSON tolerando fences ```json ... ``` y texto alrededor. */
+  /**
+   * Parsea JSON tolerando fences ```json ... ``` y texto alrededor
+   * (primer bloque {...} o [...] balanceado).
+   */
   private parseJson(content: string): unknown {
     let text = content.trim();
     const fenceMatch = /```(?:json)?\s*([\s\S]*?)\s*```/.exec(text);
@@ -287,46 +461,5 @@ export class AiService {
         return null;
       }
     }
-  }
-
-  private buildSystemPrompt(context: AiContext): string {
-    const clientList =
-      context.clients.map((c) => `#${c.id} ${c.name}`).join('\n') ||
-      '(sin clientes)';
-    const memberList =
-      context.members.map((m) => `#${m.id} ${m.name}`).join('\n') ||
-      '(sin personas)';
-
-    return [
-      'Eres el intérprete de un asistente interno que recibe peticiones en español del dueño de una agencia para gestionar pendientes (tareas) de clientes.',
-      'Tu única salida es UN objeto JSON de intención, sin texto adicional, sin markdown y sin explicaciones.',
-      '',
-      `Hoy es ${context.today}. Resuelve cualquier fecha relativa ("mañana", "el viernes", "en una semana") a formato YYYY-MM-DD usando esa fecha.`,
-      '',
-      'Operaciones válidas y sus parámetros (todos los parámetros son opcionales; omite los que el usuario NO mencionó, no inventes títulos, razones ni fechas):',
-      '- "crear_pendiente": crear un pendiente. Parámetros: "clientName" (string, nombre del cliente), "title" (string, título del pendiente), "links" (array de strings con URLs).',
-      '- "asignar": asignar un pendiente a personas. Parámetros: "taskId" (entero, id del pendiente), "memberNames" (array de strings con nombres de personas), "dueDate" (string YYYY-MM-DD, fecha de entrega).',
-      '- "reasignar": cambiar las personas asignadas. Parámetros: "taskId" (entero), "memberNames" (array de strings), "reason" (string, razón del cambio).',
-      '- "extender": extender la fecha de entrega. Parámetros: "taskId" (entero), "newDueDate" (string YYYY-MM-DD), "reason" (string, razón de la extensión).',
-      '- "terminar": marcar un pendiente como terminado. Parámetros: "taskId" (entero).',
-      '- "cambiar_estado": cambiar el estado de un pendiente. Parámetros: "taskId" (entero), "status" (uno de: PENDIENTE, ASIGNADO, TERMINADO, EXTENDIDO), "reason" (string).',
-      '- "listar_pendientes": listar pendientes, opcionalmente de un cliente. Parámetros: "clientName" (string).',
-      '- "listar_clientes": listar los clientes. Sin parámetros.',
-      '- "listar_personas": listar las personas del equipo. Sin parámetros.',
-      '- "ayuda": el usuario pide ayuda o pregunta qué puedes hacer. Sin parámetros.',
-      '- "desconocida": la petición no corresponde a ninguna operación o es ambigua. Sin parámetros.',
-      '',
-      'Clientes activos (id y nombre), úsalos para normalizar el nombre que mencione el usuario; devuelve SIEMPRE el nombre como string en "clientName", nunca el id:',
-      clientList,
-      '',
-      'Personas del equipo (id y nombre), úsalas para normalizar nombres; devuelve SIEMPRE nombres como strings en "memberNames", nunca ids:',
-      memberList,
-      '',
-      'Reglas estrictas:',
-      '- Responde SOLO el JSON de la intención, con la clave "operation" obligatoria.',
-      '- Omite todo campo que el usuario no haya mencionado explícitamente.',
-      '- Si la petición no encaja en ninguna operación o es ambigua, responde {"operation":"desconocida"}.',
-      '- Si el usuario pide ayuda o pregunta qué puedes hacer, responde {"operation":"ayuda"}.',
-    ].join('\n');
   }
 }

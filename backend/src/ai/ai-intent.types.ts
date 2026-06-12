@@ -12,6 +12,7 @@ export const AI_OPERATIONS = [
   'listar_clientes',
   'listar_personas',
   'ayuda',
+  'charla',
   'desconocida',
 ] as const;
 export type AiOperation = (typeof AI_OPERATIONS)[number];
@@ -26,7 +27,12 @@ export interface AiContext {
 
 /**
  * Intención estructurada. Los campos no identificadores son opcionales:
- * el LLM puede omitirlos y el bot pide al usuario lo que falte.
+ * el LLM puede omitirlos y el bot pregunta al usuario lo que falte.
+ *
+ * `crear_pendiente` acepta también `memberNames` y `dueDate`: si vienen,
+ * tras crear el pendiente el bot ejecuta la asignación con la misma lógica
+ * de negocio (si falta `dueDate`, crea el pendiente y pregunta la fecha
+ * para completar la asignación).
  */
 export type AiIntent =
   | {
@@ -34,6 +40,8 @@ export type AiIntent =
       clientName?: string;
       title?: string;
       links?: string[];
+      memberNames?: string[];
+      dueDate?: string; // YYYY-MM-DD
     }
   | {
       operation: 'asignar';
@@ -64,11 +72,20 @@ export type AiIntent =
   | { operation: 'listar_clientes' }
   | { operation: 'listar_personas' }
   | { operation: 'ayuda' }
+  /** Saludo, agradecimiento o charla casual: respuesta amable, sin acción. */
+  | { operation: 'charla' }
   | { operation: 'desconocida' };
 
+/**
+ * Resultado de interpretar un mensaje. Un mensaje puede contener VARIAS
+ * intenciones ("andrea tiene que hacer X y Y para togrow" → 2 crear_pendiente).
+ */
 export type AiIntentResult =
-  | { kind: 'intent'; intent: AiIntent }
-  /** El modelo no entendió la petición (operation = desconocida). */
+  /** ≥1 intención ejecutable (se filtran charla/desconocida si hay otras). */
+  | { kind: 'intents'; intents: AiIntent[] }
+  /** El mensaje es solo saludo/charla: responder amable, sin ejecutar nada. */
+  | { kind: 'smalltalk' }
+  /** El modelo no entendió la petición (solo intenciones desconocidas). */
   | { kind: 'unknown' }
-  /** LM Studio inaccesible o JSON malformado tras 1 reintento. */
+  /** LM Studio inaccesible o JSON malformado tras el reintento. */
   | { kind: 'error' };

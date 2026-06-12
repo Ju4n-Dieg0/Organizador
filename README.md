@@ -47,13 +47,17 @@ Sin token configurado, el bot y los recordatorios se desactivan solos y la web f
 
 Además de los comandos slash, el bot entiende **lenguaje natural** (solo desde el chat del dueño):
 escribe lo que necesitas y un LLM local vía [LM Studio](https://lmstudio.ai) lo transforma en una
-intención estructurada que se ejecuta con la misma lógica de negocio que los comandos (historial
-`TaskEvent`, razones obligatorias para reasignar/extender, validación de transiciones).
+o **varias** intenciones estructuradas que se ejecutan con la misma lógica de negocio que los
+comandos (historial `TaskEvent`, razones obligatorias para reasignar/extender, validación de
+transiciones). Clientes y personas se indican **siempre por nombre** (el bot nunca pide sus IDs):
+si el nombre no coincide exactamente, busca parecidos (acentos, mayúsculas, errores de tipeo) y
+pregunta «¿Te refieres a "ToGrow"?» — un «sí» confirma y ejecuta.
 
 ### Configurar LM Studio
 
-1. Instala LM Studio y descarga un modelo con buen soporte de instrucciones en español
-   (p. ej. un Llama 3.1 8B Instruct o Qwen 2.5 7B Instruct).
+1. Instala LM Studio y descarga un modelo con buen soporte de instrucciones en español.
+   El prompt está calibrado y probado contra `phi-3-mini-4k-instruct`; un modelo mayor
+   (Llama 3.1 8B Instruct o Qwen 2.5 7B Instruct) mejora la extracción en frases complejas.
 2. Arranca el servidor local: pestaña **Developer → Start Server** (por defecto `http://localhost:1234`).
 3. En `backend/.env`:
 
@@ -79,9 +83,33 @@ disponible y sugiere `/ayuda`.
 | "muéstrame los clientes" | `/clientes` |
 | "¿quiénes están en el equipo?" | `/personas` |
 
-Si falta un dato obligatorio (p. ej. extender sin razón), el bot responde qué falta y cómo
-reformular; el siguiente mensaje puede aportar solo el dato faltante y se completa la operación.
-La ejecución siempre pasa por una intención JSON validada: nada se ejecuta si es ambiguo.
+### Frases con varias intenciones, asignación al crear y confirmación de nombres
+
+Una sola frase puede crear **varios pendientes** y dejar lista la asignación:
+
+> **Tú:** andrea tiene que crear unas conversiones de meta y arreglar el multiidioma
+> del scrapping para togrow
+>
+> **Bot:** Detecté 2 pendientes para ToGrow asignados a Andrea: 1) Crear conversiones
+> de Meta, 2) Arreglar el multiidioma del scrapping. Los creé. ¿Para qué fecha se los asigno?
+>
+> **Tú:** mañana
+>
+> **Bot:** 📌 Listo, ambos asignados a Andrea para mañana. (eventos `CREACION` + `ASIGNACION`)
+
+Si un nombre no coincide exactamente, el bot propone el más parecido:
+
+> **Tú:** crea un pendiente para togro: revisar la pauta
+>
+> **Bot:** ¿Te refieres a "ToGrow"?
+>
+> **Tú:** sí → ejecuta. («cancela» u «olvídalo» descarta el borrador en cualquier momento)
+
+Los saludos y agradecimientos («hola», «gracias») reciben una respuesta amable presentando
+qué puede hacer el bot, sin plantillas de error. Si falta un dato obligatorio (p. ej. extender
+sin razón), el bot pregunta de forma conversacional citando lo que dijiste; el siguiente mensaje
+puede aportar solo el dato faltante. La ejecución siempre pasa por intenciones JSON validadas:
+nada se ejecuta si es ambiguo.
 
 ## Documentación
 

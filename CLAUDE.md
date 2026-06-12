@@ -103,9 +103,14 @@ Para decisiones de UI/UX usa la skill `/ui-ux-pro-max`.
   (`/pendiente`, `/asignar`, `/reasignar`, `/estado`, `/extender`, `/terminar`, `/pendientes`, `/clientes`, `/personas`, `/ayuda`).
   Los chats del equipo SOLO reciben alertas y recordatorios (cron `REMINDER_CRON`, default 9:00).
   El chat del dueño también acepta **texto libre** (modo conversacional): el módulo `ai/` lo
-  interpreta con LM Studio y lo ejecuta contra los services existentes (misma lógica de negocio,
-  mismos `TaskEvent` y razones obligatorias). Si falta `LMSTUDIO_BASE_URL`, el modo se desactiva
-  solo y el bot sugiere `/ayuda`.
+  interpreta con LM Studio como una LISTA de intenciones (un mensaje puede traer varias) y las
+  ejecuta contra los services existentes (misma lógica de negocio, mismos `TaskEvent` y razones
+  obligatorias). En este modo clientes y personas se resuelven SIEMPRE por nombre con fuzzy
+  matching (nunca se piden sus IDs); las sugerencias y datos faltantes quedan en un borrador
+  multi-turno que el siguiente mensaje confirma («sí»), completa o descarta («cancela»). El
+  prompt está calibrado contra phi-3-mini (few-shot ≤6 pares, `json_schema` solo como reintento:
+  el constrained decoding degrada a modelos pequeños). Si falta `LMSTUDIO_BASE_URL`, el modo se
+  desactiva solo y el bot sugiere `/ayuda`.
 
 Contrato API completo: `docs/SPEC.md`. Schema: `backend/prisma/schema.prisma`.
 

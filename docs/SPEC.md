@@ -118,8 +118,10 @@ Notificaciones salientes (vía `NotificationsService`):
 
 El bot acepta **texto libre** (sin slash) SOLO del chat del dueño. El texto se interpreta con
 LM Studio (API compatible OpenAI, `POST {LMSTUDIO_BASE_URL}/chat/completions`) y se transforma
-en una intención estructurada que se ejecuta contra los services existentes (misma lógica de
-negocio que los comandos: TaskEvent, razones obligatorias, transiciones validadas).
+en una LISTA de intenciones estructuradas que se ejecutan contra los services existentes (misma
+lógica de negocio que los comandos: TaskEvent, razones obligatorias, transiciones validadas).
+La flexibilidad está SOLO en la interpretación y en las respuestas: nunca se ejecuta nada
+que no haya pasado la validación estructurada.
 
 ### Contrato del módulo `backend/src/ai/`
 
@@ -133,9 +135,11 @@ interface AiContext {
   today: string;                              // YYYY-MM-DD (resolver fechas relativas)
 }
 
-// Campos no identificadores son opcionales: el LLM puede omitirlos y el bot pide lo que falte.
+// Campos no identificadores son opcionales: el LLM puede omitirlos y el bot pregunta lo que falte.
+// Un mensaje puede contener VARIAS intenciones (p. ej. dos crear_pendiente en una frase).
 type AiIntent =
-  | { operation: 'crear_pendiente'; clientName?: string; title?: string; links?: string[] }
+  | { operation: 'crear_pendiente'; clientName?: string; title?: string; links?: string[];
+      memberNames?: string[]; dueDate?: string }  // si vienen, tras crear se ejecuta la asignación
   | { operation: 'asignar'; taskId?: number; memberNames?: string[]; dueDate?: string }      // YYYY-MM-DD
   | { operation: 'reasignar'; taskId?: number; memberNames?: string[]; reason?: string }
   | { operation: 'extender'; taskId?: number; newDueDate?: string; reason?: string }
@@ -145,12 +149,14 @@ type AiIntent =
   | { operation: 'listar_clientes' }
   | { operation: 'listar_personas' }
   | { operation: 'ayuda' }
+  | { operation: 'charla' }        // saludo/gracias/charla casual: respuesta amable, sin acción
   | { operation: 'desconocida' };
 
 type AiIntentResult =
-  | { kind: 'intent'; intent: AiIntent }
-  | { kind: 'unknown' }    // el modelo no entendió la petición
-  | { kind: 'error' };     // LM Studio inaccesible o JSON malformado tras 1 reintento
+  | { kind: 'intents'; intents: AiIntent[] }  // ≥1 intención ejecutable (charla/desconocida filtradas si hay otras)
+  | { kind: 'smalltalk' }  // el mensaje es solo saludo/charla
+  | { kind: 'unknown' }    // el modelo no entendió la petición (solo desconocidas)
+  | { kind: 'error' };     // LM Studio inaccesible o JSON malformado tras el reintento
 
 interface AiService {
   isEnabled(): boolean;
@@ -158,18 +164,52 @@ interface AiService {
 }
 ```
 
-Implementación: `fetch` nativo (sin dependencias nuevas) con salida JSON forzada
-(`response_format: json_schema`, fallback a prompt estricto + validación) y 1 reintento.
+Implementación (`fetch` nativo, sin dependencias nuevas, calibrada contra phi-3-mini):
+
+- **Intento 1 sin `response_format`**: prompt de sistema compacto + few-shot como pares
+  user/assistant (≤6 ejemplos: más ejemplos descarrilan a phi-3-mini), `temperature: 0`,
+  `max_tokens` acotado y `stop: ["\n\n"]` para cortar divagues. Parser tolerante (fences,
+  primer JSON balanceado).
+- **Reintento con `response_format: json_schema` (strict)**: schema `{ intents: [...] }` con
+  enum de operaciones; garantiza JSON parseable (la decodificación restringida degrada la
+  calidad de phi-3-mini, por eso es el fallback y no el primer intento).
+- **Validación tolerante**: whitelist de campos por operación (campos inventados se descartan),
+  tipos campo a campo, fechas `YYYY-MM-DD`, y **normalización de operaciones inventadas** por
+  sinónimos (p. ej. `gracias`→`charla`, `terminar_pendiente`→`terminar`, `obtener_clientes`→
+  `listar_clientes`, `marcar_como`+`status`→`cambiar_estado`); estados en inglés (`EXTENDED`)
+  se mapean al enum. Operación no mapeable → `desconocida`.
 
 ### Reglas del handler de texto libre (Telegram)
 
 - Misma restricción de seguridad que los comandos (`TELEGRAM_OWNER_CHAT_ID`); los textos que
   empiezan con `/` no pasan por la IA.
-- Resolución de nombres → IDs SIEMPRE vía los helpers existentes del bot (manejo de ambigüedad).
+- **Nunca se piden IDs de cliente ni de persona**: todo se resuelve por nombre vía
+  `TelegramResolverService` con fuzzy matching (normaliza acentos/mayúsculas, substring,
+  distancia de edición). Contrato del resolver:
+
+```ts
+type NameResolution<T> =
+  | { kind: 'match'; entity: T }        // única coincidencia confiable: se usa directo
+  | { kind: 'suggestion'; entity: T }   // parecido razonable: preguntar «¿Te refieres a "X"?»
+  | { kind: 'ambiguous'; options: T[] } // varios candidatos: preguntar cuál
+  | { kind: 'none' };                   // sin candidatos
+```
+
+- **Borradores multi-turno**: las intenciones incompletas (faltan campos) o en espera de
+  confirmación de nombre se guardan como borrador por chat (con TTL). El siguiente mensaje
+  completa el dato, confirma («sí», «dale», «ok» ejecuta la sugerencia) o descarta
+  («cancela», «olvídalo»). Si `clientName` no coincide con ningún cliente pero sí con una
+  persona del equipo, el bot lo detecta y pregunta en vez de fallar.
+- `crear_pendiente` con `memberNames`: tras crear el pendiente se ejecuta la asignación con
+  la misma lógica de negocio; si falta `dueDate`, crea el pendiente y pregunta la fecha para
+  completar la asignación en el siguiente turno.
+- Varias intenciones en un mensaje → se ejecutan en orden, confirmando/preguntando lo que
+  falte de forma agrupada y natural («Detecté 2 pendientes para ToGrow asignados a Andrea…»).
 - La ejecución pasa por los services existentes; cero lógica de negocio duplicada.
-- Datos faltantes (p. ej. extender sin razón) → el bot responde qué falta, no ejecuta.
-- `unknown`/`desconocida` → respuesta amable sugiriendo /ayuda. IA desactivada → aviso de que
-  el modo conversacional no está disponible + sugerencia de /ayuda.
+- Respuestas conversacionales que citan lo que el usuario dijo, no plantillas genéricas.
+  `smalltalk` → saludo amable + qué puede hacer. `unknown` → respuesta amable que invita a
+  reformular. IA desactivada → aviso de que el modo conversacional no está disponible
+  + sugerencia de /ayuda.
 
 ## Variables de entorno (backend/.env)
 
