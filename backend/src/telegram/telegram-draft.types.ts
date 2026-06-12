@@ -13,6 +13,12 @@ import { TeamMemberResponseDto } from '../team-members/dto/team-member-response.
  *   persona (`query` indica cuál entrada de `memberNames` se reemplaza).
  * - `due-date`: pendientes ya CREADOS que esperan fecha para completar la
  *   asignación (taskIds + memberIds ya resueltos).
+ * - `confirm-task`: sugerencia fuzzy de pendiente por título («¿te refieres
+ *   a…?»). Un "sí" usa la tarea guardada; un "no" pasa a `task-fix`.
+ * - `task-fix`: el siguiente mensaje es el título (o "#id") del pendiente
+ *   correcto, que se vuelve a resolver por fuzzy.
+ * - `comment-text`: el siguiente mensaje es, LITERAL, el texto del comentario
+ *   (la tarea ya quedó resuelta en la intención).
  * - `reinterpret`: faltan campos libres (título, razón, ID…): el siguiente
  *   mensaje se interpreta junto al texto guardado y se reprocesa.
  */
@@ -27,6 +33,9 @@ export type DraftAwaiting =
       /** Nombres ya resueltos, para la respuesta de confirmación. */
       memberNames: string[];
     }
+  | { kind: 'confirm-task'; query: string; task: TaskResponseDto }
+  | { kind: 'task-fix' }
+  | { kind: 'comment-text' }
   | { kind: 'reinterpret' };
 
 /**
@@ -74,7 +83,10 @@ export type TeamDraftAwaiting =
   | { kind: 'member-confirm'; query: string; memberName: string }
   | { kind: 'member-name'; query: string }
   | { kind: 'assignee-or-skip' }
-  | { kind: 'field'; field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status' }
+  | {
+      kind: 'field';
+      field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status' | 'message';
+    }
   | { kind: 'confirm-send'; input: CreateTeamRequestInput; summary: string };
 
 /**

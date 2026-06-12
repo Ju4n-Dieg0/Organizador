@@ -29,6 +29,7 @@ export function buildTeamSystemPrompt(context: AiTeamContext): string {
     '- mis_pendientes: sin campos (quiere ver sus propios pendientes)',
     '- pendientes_cliente: clientName (quiere ver los pendientes de un cliente)',
     '- terminar: taskId o taskRef (ya terminó/entregó un pendiente suyo)',
+    '- comentar: taskId o taskRef, message (quiere dejar un aviso/comentario sobre un pendiente suyo, para el administrador o los demás asignados)',
     '- solicitar_pendiente: clientName, title, memberNames, dueDate (propone crear un pendiente nuevo)',
     '- solicitar_extension: taskId o taskRef, newDueDate, reason (pide más tiempo / mover la fecha)',
     '- solicitar_reasignacion: taskId o taskRef, memberNames, reason (pide pasar un pendiente suyo a otra persona)',
@@ -46,7 +47,8 @@ export function buildTeamSystemPrompt(context: AiTeamContext): string {
     '- "necesito más tiempo", "no llego", "dame hasta..." → solicitar_extension.',
     '- "pásale/pásaselo a <Persona>", "que lo haga <Persona>" → solicitar_reasignacion con memberNames.',
     '- "hay que crear/hacer..." para un cliente → solicitar_pendiente (el título resume qué hay que hacer, sin el nombre del cliente).',
-    '- "ya terminé / ya está listo / ya lo entregué" → terminar.',
+    '- "ya terminé / ya está listo / ya lo entregué" → terminar. PERO "ya casi", "todavía no", "aún no" NO es terminar: suele ser comentar.',
+    '- "sobre <pendiente>: ...", "dile al administrador que...", "avisa que..." → comentar: message = lo que quiere decir, citado breve.',
     '- La razón (reason) es el motivo que dio la persona, citado breve.',
     '- Nunca inventes campos, ids, fechas ni razones: omite lo que no se dijo.',
   ].join('\n');
@@ -101,6 +103,15 @@ export const TEAM_FEW_SHOT_MESSAGES: readonly ChatMessage[] = [
     content:
       '{"intents":[{"operation":"solicitar_pendiente","clientName":"Rivera","title":"Actualizar el catálogo","dueDate":"2026-07-01"}]}',
   },
+  {
+    role: 'user',
+    content: 'sobre el banner: el cliente todavía no manda las fotos',
+  },
+  {
+    role: 'assistant',
+    content:
+      '{"intents":[{"operation":"comentar","taskRef":"banner","message":"el cliente todavía no manda las fotos"}]}',
+  },
 ];
 
 /**
@@ -128,6 +139,7 @@ export const TEAM_INTENTS_JSON_SCHEMA = {
             newDueDate: { type: 'string' },
             status: { type: 'string', enum: [...TASK_STATUSES] },
             reason: { type: 'string' },
+            message: { type: 'string' },
           },
           required: ['operation'],
           additionalProperties: false,

@@ -2,6 +2,7 @@ import { Descriptions, Drawer, Skeleton, Space, Tag, Timeline, Typography } from
 import { Link } from 'react-router-dom';
 import { useTask } from '../../hooks/useTasks';
 import { StatusTag } from '../common/StatusTag';
+import { TaskCommentsSection } from './TaskCommentsSection';
 import { LinksList } from '../common/LinksList';
 import { DueDateCell } from './DueDateCell';
 import { formatDate, formatDateTime } from '../../services/date.service';
@@ -39,7 +40,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
     <Drawer
       open={taskId !== null}
       onClose={onClose}
-      width={520}
+      width="min(520px, 100vw)"
       title={task ? `Pendiente #${task.id}` : 'Detalle del pendiente'}
     >
       {isLoading || !task ? (
@@ -146,6 +147,8 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
               }))}
             />
           </div>
+
+          <TaskCommentsSection taskId={task.id} />
         </Space>
       )}
     </Drawer>

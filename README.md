@@ -41,7 +41,8 @@ Login web: `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` del `backend/.env`.
    (nadie necesita ver ni copiar chat ids). Desde la misma sección puedes regenerar el enlace
    o desvincular al miembro.
 4. Comandos disponibles (solo tu chat): `/ayuda`, `/clientes`, `/personas`, `/pendientes [cliente]`,
-   `/pendiente`, `/asignar`, `/reasignar`, `/extender`, `/estado`, `/terminar`.
+   `/pendiente`, `/asignar`, `/reasignar`, `/extender`, `/estado`, `/terminar`,
+   `/comentar <id> | <mensaje>`.
 5. Recordatorios automáticos según `REMINDER_CRON` (default 9:00) para entregas vencidas, de hoy y de mañana.
 
 Sin token configurado, el bot y los recordatorios se desactivan solos y la web funciona normal.
@@ -56,6 +57,11 @@ Los miembros **vinculados** no solo reciben alertas: pueden hablarle al bot en l
 - **Terminar** un pendiente propio («ya terminé el reel de ToGrow»): se aplica de inmediato,
   el historial registra que lo hizo ese miembro y el dueño recibe la notificación
   («Andrea marcó como terminado…»).
+- **Comentar** un pendiente propio («sobre el reel: el cliente aún no manda el logo»,
+  «dile al admin que ya casi termino el video»): directo, sin aprobación. El comentario queda
+  en el hilo del pendiente (visible en la web), le llega al dueño y a los demás asignados con
+  chat vinculado, y el bot confirma a quiénes se lo pasó («Listo, le pasé tu comentario al
+  administrador y a Luis»).
 - **Solicitar** todo lo demás — pendiente nuevo, extensión de fecha, reasignación a otra
   persona, cambio de estado distinto de terminar. El bot confirma lo entendido con el miembro
   y crea una **solicitud** pendiente de aprobación.
@@ -71,6 +77,22 @@ Los miembros **vinculados** no solo reciben alertas: pueden hablarle al bot en l
    «rechazada ❌: <razón>».
 4. Web y Telegram comparten el mismo flujo: si la solicitud ya se resolvió por un lado,
    el otro responde que ya fue aprobada/rechazada (sin efectos dobles).
+
+### Comentarios sobre pendientes
+
+Cada pendiente tiene un **hilo de comentarios bidireccional y compartido**, visible en la web
+(detalle del pendiente) y operable desde Telegram:
+
+- **El dueño** comenta desde la web (sección Comentarios del detalle) o desde su bot, por
+  comando (`/comentar 12 | El cliente cambió el logo`) o en lenguaje natural («dile a los del
+  reel de ToGrow que el cliente cambió el logo»). El comentario queda en el hilo y les llega
+  por Telegram a todos los asignados con chat vinculado.
+- **Un miembro asignado** comenta desde su bot en lenguaje natural («sobre el reel: el cliente
+  aún no manda el logo»). Directo, sin aprobación: llega al dueño y a los demás asignados
+  (excepto el autor) y queda en el hilo.
+
+Los comentarios no modifican el estado del pendiente ni su historial de eventos: son un canal
+de comunicación persistente por pendiente.
 
 ## Bot conversacional (LM Studio)
 
@@ -109,6 +131,7 @@ disponible y sugiere `/ayuda`.
 | "reasigna el 12 a Marta porque Ana está de vacaciones" | `/reasignar 12 \| Marta \| Ana está de vacaciones` |
 | "extiende el 12 al 25 de junio porque el cliente pidió cambios" | `/extender 12 \| 2026-06-25 \| Cliente pidió cambios` |
 | "termina el 12" / "el 12 ya quedó" | `/terminar 12` |
+| "dile a los del reel de ToGrow que el cliente cambió el logo" | `/comentar 12 \| El cliente cambió el logo` |
 | "¿qué pendientes tiene Acme?" | `/pendientes Acme` |
 | "muéstrame los clientes" | `/clientes` |
 | "¿quiénes están en el equipo?" | `/personas` |

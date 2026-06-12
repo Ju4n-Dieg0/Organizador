@@ -38,6 +38,8 @@ export const AYUDA = [
   '/estado &lt;id&gt; | &lt;estado&gt; | [razón] — cambio de estado genérico',
   '  Ej: /estado 12 | TERMINADO',
   '/terminar &lt;id&gt; — marcar como TERMINADO',
+  '/comentar &lt;id&gt; | &lt;mensaje&gt; — comentar un pendiente (avisa a los asignados)',
+  '  Ej: /comentar 12 | El cliente cambió el logo',
   '',
   'También puedes escribirme en lenguaje natural, sin comandos.',
   '  Ej: "crea un pendiente para Acme: subir el reel del viernes"',

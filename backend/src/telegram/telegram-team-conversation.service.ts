@@ -11,6 +11,7 @@ import {
   RequestsService,
 } from '../requests/requests.service';
 import { TaskResponseDto, TaskStatus } from '../tasks/dto/task-response.dto';
+import { TaskCommentsService } from '../tasks/task-comments.service';
 import { TasksService } from '../tasks/tasks.service';
 import { TeamMemberResponseDto } from '../team-members/dto/team-member-response.dto';
 import { TeamMembersService } from '../team-members/team-members.service';
@@ -119,7 +120,14 @@ type TeamStepResult = { kind: 'done' } | { kind: 'pause'; pause: TeamPause };
 
 type TaskScopedIntent = Extract<
   AiTeamIntent,
-  { operation: 'terminar' | 'solicitar_extension' | 'solicitar_reasignacion' | 'solicitar_cambio_estado' }
+  {
+    operation:
+      | 'terminar'
+      | 'comentar'
+      | 'solicitar_extension'
+      | 'solicitar_reasignacion'
+      | 'solicitar_cambio_estado';
+  }
 >;
 
 /**
@@ -143,6 +151,7 @@ export class TelegramTeamConversationService {
     private readonly config: ConfigService,
     private readonly aiService: AiService,
     private readonly tasksService: TasksService,
+    private readonly taskCommentsService: TaskCommentsService,
     private readonly clientsService: ClientsService,
     private readonly teamMembersService: TeamMembersService,
     private readonly requestsService: RequestsService,
@@ -304,6 +313,7 @@ export class TelegramTeamConversationService {
       '• Decirte tus pendientes: «¿qué tengo pendiente?»',
       '• Mostrarte los de un cliente: «¿qué hay de Acme?»',
       '• Marcar como terminado lo que entregaste: «ya terminé el reel»',
+      '• Dejar un comentario en un pendiente tuyo (les llega al administrador y a los demás asignados): «sobre el reel: el cliente aún no manda el logo»',
       '• Enviar solicitudes al administrador (él las aprueba o rechaza y yo te aviso):',
       '   – más tiempo: «necesito más tiempo para X, hasta el viernes, porque…»',
       '   – pasar una tarea: «pásale X a Luis porque…»',
@@ -492,7 +502,7 @@ export class TelegramTeamConversationService {
    */
   private applyField(
     intent: AiTeamIntent | undefined,
-    field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status',
+    field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status' | 'message',
     text: string,
   ): string | null {
     const value = text.trim();
@@ -501,6 +511,10 @@ export class TelegramTeamConversationService {
       case 'title':
         if (!value) return '¿Me repites qué hay que hacer?';
         if (intent.operation === 'solicitar_pendiente') intent.title = value;
+        return null;
+      case 'message':
+        if (!value) return '¿Qué quieres decir? Escríbeme el comentario tal cual.';
+        if (intent.operation === 'comentar') intent.message = value;
         return null;
       case 'reason':
         if (!value) return '¿Me repites la razón?';
@@ -544,6 +558,7 @@ export class TelegramTeamConversationService {
   private isTaskScoped(intent: AiTeamIntent): intent is TaskScopedIntent {
     return (
       intent.operation === 'terminar' ||
+      intent.operation === 'comentar' ||
       intent.operation === 'solicitar_extension' ||
       intent.operation === 'solicitar_reasignacion' ||
       intent.operation === 'solicitar_cambio_estado'
@@ -653,6 +668,8 @@ export class TelegramTeamConversationService {
         return this.pendientesCliente(ctx, intent);
       case 'terminar':
         return this.terminar(ctx, state, intent);
+      case 'comentar':
+        return this.comentar(ctx, state, intent);
       case 'solicitar_extension':
         return this.solicitarExtension(state, intent);
       case 'solicitar_reasignacion':
@@ -882,6 +899,55 @@ export class TelegramTeamConversationService {
     return { kind: 'done' };
   }
 
+  // ---------- comentar (directo, sin aprobación) ----------
+
+  /**
+   * Comentario directo sobre un pendiente PROPIO (mismo alcance que
+   * terminar). La notificación (dueño + demás asignados con chat, nunca el
+   * autor) la envía TaskCommentsService: aquí solo se confirma al autor
+   * mencionando a quiénes les llegó de verdad.
+   */
+  private async comentar(
+    ctx: Context,
+    state: TeamQueueState,
+    intent: Extract<AiTeamIntent, { operation: 'comentar' }>,
+  ): Promise<TeamStepResult> {
+    const res = this.resolveTaskFor(state, intent, 'comentar');
+    if (res.pause) return { kind: 'pause', pause: res.pause };
+    const task = res.task as TaskResponseDto;
+    this.applyTask(intent, task.id);
+
+    const message = intent.message?.trim();
+    if (!message) {
+      return this.pauseField(
+        'message',
+        `¿Qué quieres decir sobre «${task.title}»? Escríbeme el comentario tal cual y se lo paso.`,
+      );
+    }
+
+    await this.taskCommentsService.add(
+      task.id,
+      { type: 'MIEMBRO', memberId: state.member.id },
+      message,
+    );
+
+    const internal = await this.teamMembersService.findAllInternal();
+    const linkedIds = new Set(
+      internal.filter((m) => m.telegramChatId).map((m) => m.id),
+    );
+    const others = task.assignees
+      .filter((a) => a.memberId !== state.member.id && linkedIds.has(a.memberId))
+      .map((a) => a.name);
+    const recipients =
+      others.length > 0
+        ? `al administrador y a ${humanList(others)}`
+        : 'al administrador';
+    await ctx.reply(
+      `💬 ¡Listo! Le pasé tu comentario ${recipients}. Quedó guardado en «${task.title}» (${task.client.name}).`,
+    );
+    return { kind: 'done' };
+  }
+
   // ---------- solicitudes (requieren aprobación del dueño) ----------
 
   private pauseConfirmSend(
@@ -898,7 +964,7 @@ export class TelegramTeamConversationService {
   }
 
   private pauseField(
-    field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status',
+    field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status' | 'message',
     question: string,
   ): TeamStepResult {
     return { kind: 'pause', pause: { awaiting: { kind: 'field', field }, question } };

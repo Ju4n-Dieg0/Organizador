@@ -5,6 +5,7 @@ import { getApiErrorMessage } from '../api/http';
 import type {
   AssignTaskRequest,
   ChangeTaskStatusRequest,
+  CreateTaskCommentRequest,
   CreateTaskRequest,
   ExtendTaskRequest,
   ReassignTaskRequest,
@@ -13,6 +14,9 @@ import type {
 } from '../types/task.types';
 
 const TASKS_KEY = ['tasks'] as const;
+
+const taskCommentsKey = (taskId: number) =>
+  [...TASKS_KEY, 'detail', taskId, 'comments'] as const;
 
 export function useTasks(query: TasksQuery = {}) {
   return useQuery({
@@ -112,6 +116,40 @@ export function useCompleteTask() {
   return useMutation({
     mutationFn: (id: number) => tasksApi.complete(id),
     ...handlers,
+  });
+}
+
+/**
+ * Comentarios de un pendiente. `refetchOnMount: 'always'`: el detalle se
+ * monta al abrir el drawer y pueden llegar comentarios desde Telegram,
+ * así que cada apertura refresca el hilo.
+ */
+export function useTaskComments(taskId: number, enabled = true) {
+  return useQuery({
+    queryKey: taskCommentsKey(taskId),
+    queryFn: () => tasksApi.listComments(taskId),
+    enabled,
+    refetchOnMount: 'always',
+    staleTime: 0,
+  });
+}
+
+export function useAddTaskComment(taskId: number) {
+  const queryClient = useQueryClient();
+  const { message } = App.useApp();
+  return useMutation({
+    mutationFn: (data: CreateTaskCommentRequest) =>
+      tasksApi.createComment(taskId, data),
+    onSuccess: () => {
+      // Sin toast de éxito: ver aparecer el comentario en el hilo
+      // es el feedback (un toast por mensaje sería ruido).
+      queryClient.invalidateQueries({ queryKey: taskCommentsKey(taskId) });
+    },
+    onError: (error: unknown) => {
+      message.error(
+        getApiErrorMessage(error, 'No se pudo agregar el comentario'),
+      );
+    },
   });
 }
 

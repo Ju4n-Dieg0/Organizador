@@ -8,6 +8,7 @@ export const AI_OPERATIONS = [
   'extender',
   'terminar',
   'cambiar_estado',
+  'comentar',
   'listar_pendientes',
   'listar_clientes',
   'listar_personas',
@@ -68,6 +69,8 @@ export type AiIntent =
       status?: TaskStatus;
       reason?: string;
     }
+  /** Comentario del dueño sobre un pendiente; taskRef = título en texto libre. */
+  | { operation: 'comentar'; taskId?: number; taskRef?: string; message?: string }
   | { operation: 'listar_pendientes'; clientName?: string }
   | { operation: 'listar_clientes' }
   | { operation: 'listar_personas' }
@@ -101,6 +104,7 @@ export const AI_TEAM_OPERATIONS = [
   'mis_pendientes',
   'pendientes_cliente',
   'terminar',
+  'comentar',
   'solicitar_pendiente',
   'solicitar_extension',
   'solicitar_reasignacion',
@@ -139,6 +143,8 @@ export type AiTeamIntent =
   | { operation: 'mis_pendientes' }
   | { operation: 'pendientes_cliente'; clientName?: string }
   | { operation: 'terminar'; taskId?: number; taskRef?: string }
+  /** Comentario directo (sin aprobación) sobre un pendiente PROPIO. */
+  | { operation: 'comentar'; taskId?: number; taskRef?: string; message?: string }
   | {
       operation: 'solicitar_pendiente';
       clientName?: string;

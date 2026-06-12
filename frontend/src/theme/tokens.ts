@@ -86,6 +86,15 @@ export const requestStatusColor = {
   RECHAZADA: colors.error,
 } as const;
 
+/**
+ * Color semántico por autor de comentario: DUENO=accent (el administrador
+ * se distingue con el acento único), MIEMBRO=textMuted (neutro).
+ */
+export const commentAuthorColor = {
+  DUENO: colors.accent,
+  MIEMBRO: colors.textMuted,
+} as const;
+
 export const fonts = {
   body: "'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif",
   heading: "'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif",

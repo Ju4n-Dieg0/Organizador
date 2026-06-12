@@ -3,7 +3,9 @@ import { API_PATHS } from '../constants/api';
 import type {
   AssignTaskRequest,
   ChangeTaskStatusRequest,
+  CreateTaskCommentRequest,
   CreateTaskRequest,
+  TaskCommentResponse,
   ExtendTaskRequest,
   ReassignTaskRequest,
   TaskDetailResponse,
@@ -65,6 +67,24 @@ export const tasksApi = {
     data: ChangeTaskStatusRequest,
   ): Promise<TaskResponse> => {
     const res = await http.post<TaskResponse>(`${API_PATHS.tasks}/${id}/status`, data);
+    return res.data;
+  },
+
+  listComments: async (taskId: number): Promise<TaskCommentResponse[]> => {
+    const res = await http.get<TaskCommentResponse[]>(
+      `${API_PATHS.tasks}/${taskId}/comments`,
+    );
+    return res.data;
+  },
+
+  createComment: async (
+    taskId: number,
+    data: CreateTaskCommentRequest,
+  ): Promise<TaskCommentResponse> => {
+    const res = await http.post<TaskCommentResponse>(
+      `${API_PATHS.tasks}/${taskId}/comments`,
+      data,
+    );
     return res.data;
   },
 };

@@ -52,6 +52,7 @@ model TeamMember {
   assignments    TaskAssignee[]
   linkToken      TelegramLinkToken?
   requests       TeamRequest[]
+  comments       TaskComment[]
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 }
@@ -92,6 +93,7 @@ model Task {
   assignees   TaskAssignee[]
   events      TaskEvent[]
   requests    TeamRequest[]
+  comments    TaskComment[]
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -147,6 +149,24 @@ model TeamRequest {
   updatedAt       DateTime      @updatedAt
 
   @@index([status])
+}
+
+enum CommentAuthorType {
+  DUENO
+  MIEMBRO
+}
+
+model TaskComment {
+  id         Int               @id @default(autoincrement())
+  taskId     Int
+  task       Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorType CommentAuthorType
+  memberId   Int?
+  member     TeamMember?       @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  text       String
+  createdAt  DateTime          @default(now())
+
+  @@index([taskId])
 }
 
 model TaskEvent {

@@ -19,6 +19,11 @@ El schema autoritativo está en `backend/prisma/schema.prisma`.
 - **TaskEvent**: `type (CREACION|ASIGNACION|REASIGNACION|EXTENSION|CAMBIO_ESTADO)`,
   `fromStatus?`, `toStatus?`, `reason?`, `detail?`, `createdAt`. Toda mutación de estado/asignación
   crea su evento **en la misma transacción**.
+- **TaskComment** (comentario sobre un pendiente): hilo bidireccional y compartido por Task.
+  `taskId` (Cascade), `authorType (DUENO|MIEMBRO)`, `memberId?` (TeamMember, solo si
+  `authorType = MIEMBRO`; `SetNull` si el miembro desapareciera), `text` (no vacío),
+  `createdAt`. `@@index([taskId])`. Los comentarios NO generan `TaskEvent` (no son cambios de
+  estado): viven en su propio hilo. Nunca se editan ni borran.
 - **TeamRequest** (solicitud del equipo): petición de un miembro vinculado por Telegram que
   requiere aprobación del dueño. `type (CREAR_PENDIENTE|EXTENSION|REASIGNACION|CAMBIO_ESTADO)`,
   `status (PENDIENTE|APROBADA|RECHAZADA, default PENDIENTE)`, `requesterId` (TeamMember),
@@ -106,6 +111,30 @@ del DTO respectivamente.
 | POST | `/api/tasks/:id/extend` | `{newDueDate: string(ISO), reason: string}` | TaskResponse |
 | POST | `/api/tasks/:id/complete` | — | TaskResponse |
 | POST | `/api/tasks/:id/status` | `{status, reason?}` | TaskResponse |
+| GET | `/api/tasks/:id/comments` | — | TaskCommentResponse[] (orden `createdAt` asc; 404 si el pendiente no existe) |
+| POST | `/api/tasks/:id/comments` | `{text: string}` (no vacía tras trim) | TaskCommentResponse — la web solo la usa el admin: crea comentario con `authorType = DUENO` |
+
+#### Comentarios (módulo `backend/src/tasks/`, service propio `TaskCommentsService`)
+
+- El service de comentarios es ÚNICO: web (controller) y bot de Telegram pasan por él.
+  La notificación vive DENTRO del service (nunca duplicada en los callers):
+
+```ts
+type CommentAuthor = { type: 'DUENO' } | { type: 'MIEMBRO'; memberId: number };
+// TaskCommentsService (exportado por TasksModule):
+//   list(taskId): Promise<TaskCommentResponseDto[]>
+//   add(taskId, author: CommentAuthor, text: string): Promise<TaskCommentResponseDto>
+```
+
+- `add` valida que el pendiente exista (404) y que `text` no quede vacío (400); si el autor es
+  MIEMBRO valida que el miembro exista. Luego notifica vía
+  `NotificationsService.notifyTaskCommented(task, comment)`:
+  - A TODOS los asignados con `telegramChatId`, EXCEPTO el autor (exclusión por `memberId`,
+    no por nombre).
+  - Si el autor es MIEMBRO, también al dueño («<nombre> comentó en "<título>": <texto>»).
+  - Si el autor es DUENO, el dueño no se auto-notifica.
+- `authorName` lo computa el backend: `'Administrador'` para DUENO; nombre del miembro para
+  MIEMBRO (`'Miembro eliminado'` si `memberId` quedó null).
 
 ### Team requests (solicitudes del equipo) — módulo `backend/src/requests/`
 
@@ -166,6 +195,14 @@ interface TaskResponse {
 interface TaskEventResponse { id: number; type: TaskEventType; fromStatus: TaskStatus | null; toStatus: TaskStatus | null; reason: string | null; detail: string | null; createdAt: string }
 interface TaskDetailResponse extends TaskResponse { events: TaskEventResponse[] }
 
+type CommentAuthorType = 'DUENO' | 'MIEMBRO';
+interface TaskCommentResponse {
+  id: number; taskId: number;
+  authorType: CommentAuthorType;
+  authorName: string;            // 'Administrador' (DUENO) o nombre del miembro
+  text: string; createdAt: string;
+}
+
 type TeamRequestType = 'CREAR_PENDIENTE' | 'EXTENSION' | 'REASIGNACION' | 'CAMBIO_ESTADO';
 type TeamRequestStatus = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
 
@@ -197,7 +234,9 @@ Roles por chat:
 
 - **Dueño** (`TELEGRAM_OWNER_CHAT_ID`): comandos completos (separador `|`) + texto libre con
   todas las operaciones. Comandos: `/ayuda /clientes /personas /pendientes [cliente]
-  /pendiente /asignar /reasignar /extender /estado /terminar` — ver `.claude/agents/telegram-bot.md`.
+  /pendiente /asignar /reasignar /extender /estado /terminar /comentar` — ver `.claude/agents/telegram-bot.md`.
+  `/comentar <id> | <mensaje>`: agrega un comentario del dueño al pendiente vía
+  `TaskCommentsService.add` (misma notificación a asignados que la web).
 - **Miembro vinculado** (`telegramChatId` en TeamMember): recibe alertas/recordatorios Y habla
   con el bot en **texto libre** (modo conversacional de equipo, ver § IA) con capacidades
   RESTRINGIDAS. Los comandos slash NO están disponibles para miembros (si envían uno, el bot
@@ -215,6 +254,12 @@ Roles por chat:
    estado distinto de terminar → crean un `TeamRequest`. El bot confirma lo entendido con el
    miembro ANTES de enviar la solicitud (multi-turno, fuzzy matching con «¿te refieres a…?»,
    igual de amigable que el modo del dueño).
+4. **Comentar un pendiente (directo, sin aprobación)**: sobre SUS pendientes asignados
+   (mismo alcance que terminar). Ejecuta `TaskCommentsService.add` con
+   `{type: 'MIEMBRO', memberId}`; el comentario queda en el hilo, llega al dueño y a los demás
+   asignados (excepto el autor). Si falta el mensaje, el bot lo pregunta (borrador multi-turno);
+   al enviarse confirma de forma natural a quiénes llegó («Listo, le pasé tu comentario al
+   administrador y a Luis»). NO pasa por `TeamRequest`.
 
 Los pendientes propios/del cliente se referencian por título (fuzzy, `TelegramResolverService`
 extendido a tareas) — nunca se piden IDs. Validación de alcance SIEMPRE en la capa telegram:
@@ -245,9 +290,12 @@ interface TelegramSender {
 ```
 
 `NotificationsService` agrega: `notifyTaskCompletedByMember(task, memberName)`,
-`notifyRequestCreated(request: TeamRequestResponse)` (dueño, con botones) y
+`notifyRequestCreated(request: TeamRequestResponse)` (dueño, con botones),
 `notifyRequestResolved(request)` (miembro solicitante; resuelve su chatId vía
-`TeamMembersService.findAllInternal()`, igual que las alertas existentes).
+`TeamMembersService.findAllInternal()`, igual que las alertas existentes) y
+`notifyTaskCommented(task: TaskResponse, comment: TaskCommentResponse, authorMemberId?: number)`
+(asignados con chatId excepto el autor —el DTO no expone `memberId`, por eso viaja como tercer
+parámetro—; si el autor es MIEMBRO, también al dueño).
 
 ### Vinculación del equipo por deep link de /start
 
@@ -303,6 +351,12 @@ type AiIntent =
   | { operation: 'extender'; taskId?: number; newDueDate?: string; reason?: string }
   | { operation: 'terminar'; taskId?: number }
   | { operation: 'cambiar_estado'; taskId?: number; status?: TaskStatus; reason?: string }
+  | { operation: 'comentar'; taskId?: number; taskRef?: string; message?: string }
+      // comentario del dueño sobre un pendiente; taskRef = título en texto libre
+      // («dile a los del reel de ToGrow que el cliente cambió el logo»). La capa
+      // telegram resuelve taskRef por fuzzy matching con confirmación (misma
+      // resolución de pendientes por título que ya usan las demás operaciones)
+      // y si falta message lo pregunta (borrador multi-turno).
   | { operation: 'listar_pendientes'; clientName?: string }
   | { operation: 'listar_clientes' }
   | { operation: 'listar_personas' }
@@ -345,6 +399,10 @@ type AiTeamIntent =
   | { operation: 'mis_pendientes' }
   | { operation: 'pendientes_cliente'; clientName?: string }
   | { operation: 'terminar'; taskId?: number; taskRef?: string }
+  | { operation: 'comentar'; taskId?: number; taskRef?: string; message?: string }
+      // comentario directo (sin aprobación) sobre un pendiente PROPIO
+      // («sobre el reel: el cliente aún no manda el logo», «dile al admin que…»).
+      // Alcance restringido a myTasks (mismo resolveTaskFor que terminar).
   | { operation: 'solicitar_pendiente'; clientName?: string; title?: string;
       memberNames?: string[]; dueDate?: string }
   | { operation: 'solicitar_extension'; taskId?: number; taskRef?: string;

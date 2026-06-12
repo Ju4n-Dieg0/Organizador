@@ -9,6 +9,7 @@ import {
   TASK_STATUSES,
   TaskResponseDto,
 } from '../tasks/dto/task-response.dto';
+import { TaskCommentsService } from '../tasks/task-comments.service';
 import { TasksService } from '../tasks/tasks.service';
 import { TeamMemberResponseDto } from '../team-members/dto/team-member-response.dto';
 import { TeamMembersService } from '../team-members/team-members.service';
@@ -151,6 +152,7 @@ export class TelegramConversationService {
   constructor(
     private readonly aiService: AiService,
     private readonly tasksService: TasksService,
+    private readonly taskCommentsService: TaskCommentsService,
     private readonly clientsService: ClientsService,
     private readonly teamMembersService: TeamMembersService,
     private readonly resolver: TelegramResolverService,
@@ -298,10 +300,86 @@ export class TelegramConversationService {
       case 'due-date':
         await this.resumeDueDate(ctx, draft, awaiting, text);
         return;
+      case 'confirm-task': {
+        if (AFFIRMATIONS.has(normalized)) {
+          this.applyTaskToIntent(draft.intents[0], awaiting.task.id);
+          this.draft = null;
+          await this.processQueue(ctx, this.stateFromDraft(draft));
+          return;
+        }
+        if (normalized === 'no') {
+          draft.awaiting = { kind: 'task-fix' };
+          draft.createdAt = Date.now();
+          await ctx.reply(
+            'Vale. ¿De qué pendiente hablamos entonces? Dime el título o el número (lo ves en /pendientes).',
+          );
+          return;
+        }
+        // "no, el otro reel" o directamente el título/número correcto.
+        const candidate = /^no[\s,]/i.test(text)
+          ? text.replace(/^no[\s,]+/i, '')
+          : text;
+        this.applyTaskRefToIntent(draft.intents[0], candidate);
+        this.draft = null;
+        await this.processQueue(ctx, this.stateFromDraft(draft));
+        return;
+      }
+      case 'task-fix': {
+        if (!text.trim()) {
+          draft.createdAt = Date.now();
+          await ctx.reply('¿Me repites el título o el número del pendiente?');
+          return;
+        }
+        this.applyTaskRefToIntent(draft.intents[0], text);
+        this.draft = null;
+        await this.processQueue(ctx, this.stateFromDraft(draft));
+        return;
+      }
+      case 'comment-text': {
+        const value = text.trim();
+        if (!value) {
+          draft.createdAt = Date.now();
+          await ctx.reply('¿Qué les digo? Escríbeme el comentario tal cual.');
+          return;
+        }
+        const intent = draft.intents[0];
+        if (intent?.operation === 'comentar') intent.message = value;
+        this.draft = null;
+        await this.processQueue(ctx, this.stateFromDraft(draft));
+        return;
+      }
       case 'reinterpret':
         await this.resumeReinterpret(ctx, draft, text);
         return;
     }
+  }
+
+  /** Fija el taskId resuelto en la intención actual (si aplica). */
+  private applyTaskToIntent(
+    intent: AiIntent | undefined,
+    taskId: number,
+  ): void {
+    if (intent?.operation === 'comentar') {
+      intent.taskId = taskId;
+      intent.taskRef = undefined;
+    }
+  }
+
+  /** Aplica la referencia textual ("#12", "12" o un título) a la intención. */
+  private applyTaskRefToIntent(
+    intent: AiIntent | undefined,
+    raw: string,
+  ): void {
+    if (intent?.operation !== 'comentar') return;
+    const text = raw.trim();
+    const idMatch = /^#?(\d+)$/.exec(text);
+    if (idMatch) {
+      intent.taskId = Number.parseInt(idMatch[1], 10);
+      intent.taskRef = undefined;
+      return;
+    }
+    intent.taskRef = text;
+    intent.taskId = undefined;
   }
 
   private stateFromDraft(
@@ -548,6 +626,8 @@ export class TelegramConversationService {
         return this.terminar(ctx, state, intent);
       case 'cambiar_estado':
         return this.cambiarEstado(ctx, state, intent);
+      case 'comentar':
+        return this.comentar(ctx, intent);
       case 'listar_pendientes':
         return this.listarPendientes(ctx, state, intent);
       case 'listar_clientes':
@@ -1028,6 +1108,111 @@ export class TelegramConversationService {
     return { kind: 'done' };
   }
 
+  /**
+   * Comentario del dueño sobre un pendiente. La tarea se resuelve por taskId
+   * directo o por título (fuzzy con confirmación, igual que el modo de
+   * equipo); si falta el mensaje se pregunta y se toma LITERAL (sin volver al
+   * LLM). La notificación a los asignados la envía TaskCommentsService.
+   */
+  private async comentar(
+    ctx: Context,
+    intent: Extract<AiIntent, { operation: 'comentar' }>,
+  ): Promise<StepResult> {
+    let task: TaskResponseDto;
+    if (intent.taskId) {
+      // findOne lanza 404 si no existe (la cola lo reporta amable).
+      task = await this.tasksService.findOne(intent.taskId);
+    } else {
+      const ref = intent.taskRef?.trim();
+      if (!ref) {
+        return {
+          kind: 'pause',
+          pause: {
+            awaiting: { kind: 'task-fix' },
+            question:
+              '¿En qué pendiente dejo el comentario? Dime el título o el número (lo ves en /pendientes).',
+          },
+        };
+      }
+      const open = (await this.tasksService.findAll({})).filter(
+        (t) => t.status !== 'TERMINADO',
+      );
+      const res = this.resolver.findTaskByTitle(ref, open);
+      switch (res.kind) {
+        case 'match':
+          task = res.entity;
+          break;
+        case 'suggestion':
+          return {
+            kind: 'pause',
+            pause: {
+              awaiting: { kind: 'confirm-task', query: ref, task: res.entity },
+              question: `¿Te refieres a «${res.entity.title}» (${res.entity.client.name})?`,
+            },
+          };
+        case 'ambiguous':
+          return {
+            kind: 'pause',
+            pause: {
+              awaiting: { kind: 'task-fix' },
+              question: `Hay varios pendientes que encajan con «${ref}». ¿Cuál de estos?\n${res.options
+                .map((t) => `• #${t.id} ${t.title} (${t.client.name})`)
+                .join('\n')}`,
+            },
+          };
+        case 'none':
+          return {
+            kind: 'pause',
+            pause: {
+              awaiting: { kind: 'task-fix' },
+              question: `No encuentro ningún pendiente abierto que encaje con «${ref}». ¿Me das el título exacto o el número (lo ves en /pendientes)?`,
+            },
+          };
+      }
+    }
+    this.applyTaskToIntent(intent, task.id);
+
+    const message = intent.message?.trim();
+    if (!message) {
+      return {
+        kind: 'pause',
+        pause: {
+          awaiting: { kind: 'comment-text' },
+          question: `¿Qué les digo sobre «${task.title}»? Escríbeme el comentario tal cual.`,
+        },
+      };
+    }
+
+    // La notificación (asignados con chat vinculado, excepto el autor) vive
+    // dentro del service: aquí solo se confirma al dueño.
+    await this.taskCommentsService.add(task.id, { type: 'DUENO' }, message);
+
+    const assigneeNames = task.assignees.map((a) => a.name);
+    if (assigneeNames.length === 0) {
+      await ctx.reply(
+        `💬 Listo, guardé tu comentario en «${task.title}» (${task.client.name}). Aún no hay nadie asignado, así que de momento queda solo en el hilo.`,
+      );
+      return { kind: 'done' };
+    }
+    const internal = await this.teamMembersService.findAllInternal();
+    const linkedIds = new Set(
+      internal.filter((m) => m.telegramChatId).map((m) => m.id),
+    );
+    const notified = task.assignees
+      .filter((a) => linkedIds.has(a.memberId))
+      .map((a) => a.name);
+    if (notified.length > 0) {
+      await ctx.reply(
+        `💬 Listo, dejé tu comentario en «${task.title}» (${task.client.name}) y le avisé a ${humanList(notified)}.`,
+      );
+    } else {
+      await ctx.reply(
+        `💬 Listo, dejé tu comentario en «${task.title}» (${task.client.name}). Eso sí: ${humanList(assigneeNames)} no ${assigneeNames.length > 1 ? 'tienen' : 'tiene'} Telegram vinculado, así que no ${assigneeNames.length > 1 ? 'recibieron' : 'recibió'} el aviso.`,
+      );
+    }
+    return { kind: 'done' };
+  }
+
   // ---------- intenciones de consulta ----------
 
   private async listarPendientes(
@@ -1100,6 +1285,13 @@ export class TelegramConversationService {
       }
       case 'terminar':
         return `termina el pendiente ${intent.taskId ?? ''}`.trim();
+      case 'comentar': {
+        const parts = [
+          `comenta el pendiente ${intent.taskId ?? intent.taskRef ?? ''}`.trim(),
+        ];
+        if (intent.message) parts.push(`: ${intent.message}`);
+        return parts.join('');
+      }
       case 'cambiar_estado': {
         const parts = [
           `pasa el pendiente ${intent.taskId ?? ''}`.trim(),

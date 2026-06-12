@@ -25,7 +25,12 @@ import {
   TEAM_INTENTS_JSON_SCHEMA,
 } from './ai-team-prompt';
 
-const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Default generoso: en hardware modesto un modelo 8B puede tardar >30s en
+ * procesar un prompt largo (listas de clientes/pendientes + few-shots).
+ * Configurable con LMSTUDIO_TIMEOUT_MS.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
 const MAX_TOKENS = 600;
 /** Corta los divagues de phi-3: los shots son JSON de una sola línea. */
 const STOP_SEQUENCES = ['\n\n'];
@@ -40,6 +45,7 @@ const OPERATION_FIELDS: Record<AiOperation, string[]> = {
   extender: ['taskId', 'newDueDate', 'reason'],
   terminar: ['taskId'],
   cambiar_estado: ['taskId', 'status', 'reason'],
+  comentar: ['taskId', 'taskRef', 'message'],
   listar_pendientes: ['clientName'],
   listar_clientes: [],
   listar_personas: [],
@@ -53,6 +59,7 @@ const TEAM_OPERATION_FIELDS: Record<AiTeamOperation, string[]> = {
   mis_pendientes: [],
   pendientes_cliente: ['clientName'],
   terminar: ['taskId', 'taskRef'],
+  comentar: ['taskId', 'taskRef', 'message'],
   solicitar_pendiente: ['clientName', 'title', 'memberNames', 'dueDate'],
   solicitar_extension: ['taskId', 'taskRef', 'newDueDate', 'reason'],
   solicitar_reasignacion: ['taskId', 'taskRef', 'memberNames', 'reason'],
@@ -88,6 +95,12 @@ export class AiService {
   isEnabled(): boolean {
     const baseUrl = this.config.get<string>('LMSTUDIO_BASE_URL');
     return typeof baseUrl === 'string' && baseUrl.trim().length > 0;
+  }
+
+  /** Timeout por petición a LM Studio (LMSTUDIO_TIMEOUT_MS o default). */
+  private requestTimeoutMs(): number {
+    const raw = Number(this.config.get<string>('LMSTUDIO_TIMEOUT_MS'));
+    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   /**
@@ -220,7 +233,7 @@ export class AiService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.requestTimeoutMs()),
       });
 
       if (!response.ok) {
@@ -379,6 +392,9 @@ export class AiService {
     }
 
     const has = (...needles: string[]) => needles.some((n) => op.includes(n));
+    if (has('coment', 'mensaje', 'avis', 'decir', 'dile', 'nota')) {
+      return 'comentar';
+    }
     if (has('reasign')) return 'solicitar_reasignacion';
     if (
       has(
@@ -570,6 +586,9 @@ export class AiService {
     }
 
     const has = (...needles: string[]) => needles.some((n) => op.includes(n));
+    if (has('coment', 'mensaje', 'avis', 'decir', 'dile', 'nota')) {
+      return 'comentar';
+    }
     if (has('reasign')) return 'reasignar';
     if (has('crear', 'nuevo') && op.includes('pendiente')) {
       return 'crear_pendiente';
@@ -637,6 +656,7 @@ export class AiService {
       case 'title':
       case 'taskRef':
       case 'reason':
+      case 'message':
         return typeof value === 'string' && value.trim().length > 0
           ? value.trim()
           : undefined;

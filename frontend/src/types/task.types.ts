@@ -46,6 +46,22 @@ export interface TaskDetailResponse extends TaskResponse {
   events: TaskEventResponse[];
 }
 
+export type CommentAuthorType = 'DUENO' | 'MIEMBRO';
+
+export interface TaskCommentResponse {
+  id: number;
+  taskId: number;
+  authorType: CommentAuthorType;
+  /** 'Administrador' (DUENO) o nombre del miembro */
+  authorName: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface CreateTaskCommentRequest {
+  text: string;
+}
+
 export interface TaskLinkInput {
   url: string;
   label?: string;

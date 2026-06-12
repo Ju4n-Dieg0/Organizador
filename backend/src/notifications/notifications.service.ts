@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 // Solo el TIPO del DTO: notifications nunca importa el módulo requests
 // (requests importa NotificationsModule; un import runtime sería circular).
 import type { TeamRequestResponseDto } from '../requests/dto/team-request-response.dto';
+import type { TaskCommentResponseDto } from '../tasks/dto/task-comment-response.dto';
 import { TaskResponseDto } from '../tasks/dto/task-response.dto';
 import { TeamMembersService } from '../team-members/team-members.service';
 import { TelegramSender, TelegramSendOptions } from './telegram-sender.interface';
@@ -120,8 +121,31 @@ export class NotificationsService {
     await this.notifyAssignees(
       task,
       `✅ <b>Pendiente terminado</b>\n${this.formatTask(task)}`,
-      memberName,
+      { memberName },
     );
+  }
+
+  /**
+   * Nuevo comentario en un pendiente: llega a todos los asignados con chatId,
+   * EXCEPTO el autor (exclusión por memberId cuando es un miembro).
+   * Si el autor es MIEMBRO, también se avisa al dueño; si es DUENO, no se auto-notifica.
+   */
+  async notifyTaskCommented(
+    task: TaskResponseDto,
+    comment: TaskCommentResponseDto,
+    authorMemberId?: number,
+  ): Promise<void> {
+    const quote = `«${escapeHtml(comment.text)}»`;
+    if (comment.authorType === 'MIEMBRO') {
+      const html = `💬 <b>${escapeHtml(comment.authorName)}</b> comentó en\n${this.formatTask(task)}\n${quote}`;
+      await this.sendToOwner(html);
+      await this.notifyAssignees(task, html, { memberId: authorMemberId });
+    } else {
+      await this.notifyAssignees(
+        task,
+        `💬 <b>Nuevo comentario del administrador</b>\n${this.formatTask(task)}\n${quote}`,
+      );
+    }
   }
 
   /** Nueva solicitud del equipo: aviso al dueño con botones Aceptar/Rechazar. */
@@ -184,14 +208,16 @@ export class NotificationsService {
   private async notifyAssignees(
     task: TaskResponseDto,
     html: string,
-    excludeMemberName?: string,
+    exclude?: { memberId?: number; memberName?: string },
   ): Promise<void> {
     if (task.assignees.length === 0) return;
     const members = await this.teamMembersService.findAllInternal();
     for (const member of members) {
       if (!member.telegramChatId) continue;
       if (!task.assignees.some((a) => a.memberId === member.id)) continue;
-      if (excludeMemberName && member.name === excludeMemberName) continue;
+      if (exclude?.memberId !== undefined && member.id === exclude.memberId)
+        continue;
+      if (exclude?.memberName && member.name === exclude.memberName) continue;
       await this.sendToMember(member.telegramChatId, html);
     }
   }

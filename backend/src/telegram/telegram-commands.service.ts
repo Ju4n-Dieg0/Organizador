@@ -6,6 +6,7 @@ import {
   TASK_STATUSES,
   TaskStatus,
 } from '../tasks/dto/task-response.dto';
+import { TaskCommentsService } from '../tasks/task-comments.service';
 import { TasksService } from '../tasks/tasks.service';
 import { TeamMembersService } from '../team-members/team-members.service';
 import {
@@ -30,6 +31,7 @@ export class TelegramCommandsService {
   constructor(
     private readonly config: ConfigService,
     private readonly tasksService: TasksService,
+    private readonly taskCommentsService: TaskCommentsService,
     private readonly clientsService: ClientsService,
     private readonly teamMembersService: TeamMembersService,
     private readonly resolver: TelegramResolverService,
@@ -66,6 +68,9 @@ export class TelegramCommandsService {
     bot.command('extender', (ctx) => this.safe(ctx, () => this.extender(ctx)));
     bot.command('estado', (ctx) => this.safe(ctx, () => this.estado(ctx)));
     bot.command('terminar', (ctx) => this.safe(ctx, () => this.terminar(ctx)));
+    bot.command('comentar', (ctx) =>
+      this.safe(ctx, () => this.comentar(ctx)),
+    );
   }
 
   // ---------- comandos ----------
@@ -210,6 +215,28 @@ export class TelegramCommandsService {
     const id = this.parseId(idRaw);
     const task = await this.tasksService.complete(id);
     await replyHtml(ctx, `✅ Pendiente terminado:\n${taskBlock(task)}`);
+  }
+
+  private async comentar(ctx: Context): Promise<void> {
+    // El mensaje puede contener "|": se re-unen los argumentos restantes.
+    const [idRaw, ...rest] = this.args(ctx);
+    const message = rest.join(' | ').trim();
+    if (!idRaw || !message) {
+      throw new UsageError(
+        'Formato: /comentar <id> | <mensaje>\nEj: /comentar 12 | El cliente cambió el logo',
+      );
+    }
+    const id = this.parseId(idRaw);
+    // La notificación a los asignados (y nunca al autor) vive en el service.
+    const comment = await this.taskCommentsService.add(
+      id,
+      { type: 'DUENO' },
+      message,
+    );
+    await replyHtml(
+      ctx,
+      `💬 Comentario agregado al pendiente #${id}:\n«${escapeHtml(comment.text)}»\nLos asignados con Telegram vinculado quedaron avisados.`,
+    );
   }
 
   // ---------- helpers ----------

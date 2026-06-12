@@ -28,6 +28,7 @@ export function buildSystemPrompt(context: AiContext): string {
     '- extender: taskId, newDueDate, reason',
     '- terminar: taskId',
     '- cambiar_estado: taskId, status (PENDIENTE|ASIGNADO|TERMINADO|EXTENDIDO), reason',
+    '- comentar: taskId o taskRef, message (dejar un aviso/comentario en un pendiente para sus asignados)',
     '- listar_pendientes: clientName opcional',
     '- listar_clientes, listar_personas, ayuda: sin campos',
     '- charla: saludo, gracias o conversación casual; sin campos',
@@ -40,16 +41,17 @@ export function buildSystemPrompt(context: AiContext): string {
     '- "para <Persona>" o "<Persona> tiene que..." → memberNames (persona asignada), NO cliente.',
     '- "para el cliente X" o un nombre de la lista de clientes → clientName.',
     '- El título resume qué hay que hacer; no incluyas el nombre del cliente en el título.',
+    '- "dile/diles a los del <pendiente> que...", "coméntale a <pendiente> que...", "avísales que..." → comentar: taskRef = el pendiente nombrado (sin el cliente), message = el aviso citado breve.',
     '- Nunca inventes campos, ids, fechas ni razones: omite lo que no se dijo.',
     '- Si piden varias tareas en un mensaje, devuelve varias intenciones.',
   ].join('\n');
 }
 
 /**
- * Few-shot como pares user/assistant. EXACTAMENTE 6 ejemplos validados:
- * con más ejemplos phi-3-mini se descarrila (divaga en inglés / prosa).
- * Los nombres propios de los shots son ejemplos de formato y pueden no
- * coincidir con el contexto real: la validación posterior los normaliza.
+ * Few-shot como pares user/assistant. Lista corta y validada (7 ejemplos):
+ * con demasiados ejemplos los modelos pequeños se descarrilan (divagan en
+ * inglés / prosa). Los nombres propios de los shots son ejemplos de formato
+ * y pueden no coincidir con el contexto real: la validación los normaliza.
  *
  * IMPORTANTE: las frases user de los shots NO deben ser idénticas a frases
  * reales que el dueño usa: cuando el mensaje coincide literalmente con un
@@ -99,6 +101,15 @@ export const FEW_SHOT_MESSAGES: readonly ChatMessage[] = [
     content:
       '{"intents":[{"operation":"listar_pendientes","clientName":"ToGrow"}]}',
   },
+  {
+    role: 'user',
+    content: 'diles a los del banner de Acme que el cliente aprobó la propuesta',
+  },
+  {
+    role: 'assistant',
+    content:
+      '{"intents":[{"operation":"comentar","taskRef":"banner","message":"el cliente aprobó la propuesta"}]}',
+  },
 ];
 
 /**
@@ -122,11 +133,13 @@ export const INTENTS_JSON_SCHEMA = {
             title: { type: 'string' },
             links: { type: 'array', items: { type: 'string' } },
             taskId: { type: 'integer' },
+            taskRef: { type: 'string' },
             memberNames: { type: 'array', items: { type: 'string' } },
             dueDate: { type: 'string' },
             newDueDate: { type: 'string' },
             status: { type: 'string', enum: [...TASK_STATUSES] },
             reason: { type: 'string' },
+            message: { type: 'string' },
           },
           required: ['operation'],
           additionalProperties: false,
