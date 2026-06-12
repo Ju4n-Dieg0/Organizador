@@ -75,3 +75,35 @@ export function useActivateTeamMember() {
     ...handlers,
   });
 }
+
+/**
+ * Genera (o regenera) el enlace de vinculación de Telegram de un miembro.
+ * No muestra toast de éxito: el enlace se presenta en un modal desde la página.
+ * El error (p. ej. 503 si el bot no está configurado) muestra el mensaje del backend.
+ */
+export function useGenerateTelegramLink() {
+  const queryClient = useQueryClient();
+  const { message } = App.useApp();
+  return useMutation({
+    mutationFn: (id: number) => teamApi.generateTelegramLink(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: TEAM_KEY });
+    },
+    onError: (error: unknown) => {
+      message.error(
+        getApiErrorMessage(error, 'No se pudo generar el enlace de Telegram'),
+      );
+    },
+  });
+}
+
+export function useUnlinkTelegram() {
+  const handlers = useTeamMutationHandlers(
+    'Telegram desvinculado',
+    'No se pudo desvincular Telegram',
+  );
+  return useMutation({
+    mutationFn: (id: number) => teamApi.unlinkTelegram(id),
+    ...handlers,
+  });
+}

@@ -90,7 +90,7 @@ export function formatTeam(members: TeamMemberResponseDto[]): string {
     return 'No hay personas registradas.';
   }
   const lines = members.map((m) => {
-    const alerta = m.telegramChatId ? '🔔' : '🔕';
+    const alerta = m.telegramLinked ? '🔔' : '🔕';
     const estado = m.active ? '' : ' (inactiva)';
     return `#${m.id} <b>${escapeHtml(m.name)}</b> ${alerta}${estado} — ${m.activeTaskCount} pendientes activos`;
   });

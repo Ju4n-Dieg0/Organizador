@@ -1,20 +1,28 @@
 export interface TeamMemberResponse {
   id: number;
   name: string;
-  telegramChatId: string | null;
   active: boolean;
   activeTaskCount: number;
+  /** Tiene chat de Telegram vinculado (el chatId crudo nunca se expone). */
+  telegramLinked: boolean;
+  /** Hay un enlace de vinculación generado vigente sin usar. */
+  telegramLinkPending: boolean;
+  /** Expiración ISO del enlace vigente; solo si telegramLinkPending. */
+  telegramLinkExpiresAt: string | null;
   createdAt: string;
+}
+
+export interface TelegramLinkResponse {
+  link: string;
+  expiresAt: string;
 }
 
 export interface CreateTeamMemberRequest {
   name: string;
-  telegramChatId?: string;
 }
 
 export interface UpdateTeamMemberRequest {
   name?: string;
-  telegramChatId?: string | null;
 }
 
 export type TeamStatusFilter = 'active' | 'inactive' | 'all';

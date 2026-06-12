@@ -12,8 +12,11 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import {
   CheckCircleOutlined,
+  DisconnectOutlined,
   EditOutlined,
+  LinkOutlined,
   PlusOutlined,
+  ReloadOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { PageTransition } from '../components/common/PageTransition';
@@ -22,13 +25,21 @@ import { GlassCard } from '../components/common/GlassCard';
 import { EmptyState } from '../components/common/EmptyState';
 import { TagPill } from '../components/common/TagPill';
 import { TeamMemberFormModal } from '../components/team/TeamMemberFormModal';
+import { TelegramLinkModal } from '../components/team/TelegramLinkModal';
 import {
   useActivateTeamMember,
   useDeactivateTeamMember,
+  useGenerateTelegramLink,
   useTeamMembers,
+  useUnlinkTelegram,
 } from '../hooks/useTeam';
+import { formatDateTime } from '../services/date.service';
 import { colors } from '../theme';
-import type { TeamMemberResponse, TeamStatusFilter } from '../types/team.types';
+import type {
+  TeamMemberResponse,
+  TeamStatusFilter,
+  TelegramLinkResponse,
+} from '../types/team.types';
 
 const STATUS_OPTIONS = [
   { label: 'Activos', value: 'active' },
@@ -36,13 +47,49 @@ const STATUS_OPTIONS = [
   { label: 'Todos', value: 'all' },
 ];
 
+interface LinkModalState {
+  data: TelegramLinkResponse;
+  memberName: string;
+}
+
+/** Estado de vinculación de Telegram de un miembro, como tag semántico. */
+function TelegramStatusCell({ member }: { member: TeamMemberResponse }) {
+  if (member.telegramLinked) {
+    return (
+      <TagPill color={colors.success}>
+        <CheckCircleOutlined style={{ marginRight: 4 }} aria-hidden />
+        Conectado
+      </TagPill>
+    );
+  }
+  if (member.telegramLinkPending) {
+    return (
+      <Flex vertical gap={2} align="flex-start">
+        <TagPill color={colors.warning}>
+          <LinkOutlined style={{ marginRight: 4 }} aria-hidden />
+          Enlace pendiente
+        </TagPill>
+        <Typography.Text style={{ color: colors.textMuted, fontSize: 12 }}>
+          {member.telegramLinkExpiresAt
+            ? `Expira el ${formatDateTime(member.telegramLinkExpiresAt)}`
+            : 'Enlace sin usar'}
+        </Typography.Text>
+      </Flex>
+    );
+  }
+  return <TagPill color={colors.textMuted}>Sin vincular</TagPill>;
+}
+
 export function TeamPage() {
   const [statusFilter, setStatusFilter] = useState<TeamStatusFilter>('active');
   const { data: members, isLoading } = useTeamMembers(statusFilter);
   const deactivateMember = useDeactivateTeamMember();
   const activateMember = useActivateTeamMember();
+  const generateLink = useGenerateTelegramLink();
+  const unlinkTelegram = useUnlinkTelegram();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMemberResponse | null>(null);
+  const [linkModal, setLinkModal] = useState<LinkModalState | null>(null);
 
   const openCreate = () => {
     setEditingMember(null);
@@ -52,6 +99,12 @@ export function TeamPage() {
   const openEdit = (member: TeamMemberResponse) => {
     setEditingMember(member);
     setModalOpen(true);
+  };
+
+  const handleGenerateLink = (member: TeamMemberResponse) => {
+    generateLink.mutate(member.id, {
+      onSuccess: (data) => setLinkModal({ data, memberName: member.name }),
+    });
   };
 
   const columns: ColumnsType<TeamMemberResponse> = [
@@ -65,18 +118,10 @@ export function TeamPage() {
       ),
     },
     {
-      title: 'Chat ID de Telegram',
-      dataIndex: 'telegramChatId',
-      key: 'telegramChatId',
-      width: 200,
-      render: (chatId: string | null) =>
-        chatId ? (
-          <Typography.Text className="tnum" style={{ color: colors.textMuted }}>
-            {chatId}
-          </Typography.Text>
-        ) : (
-          <Typography.Text type="secondary">Sin configurar</Typography.Text>
-        ),
+      title: 'Telegram',
+      key: 'telegram',
+      width: 180,
+      render: (_, member) => <TelegramStatusCell member={member} />,
     },
     {
       title: 'Tareas activas',
@@ -100,53 +145,108 @@ export function TeamPage() {
     {
       title: 'Acciones',
       key: 'actions',
-      width: 130,
-      render: (_, member) => (
-        <Space size={2}>
-          <Tooltip title="Editar">
-            <Button
-              type="text"
-              icon={<EditOutlined />}
-              aria-label={`Editar a ${member.name}`}
-              onClick={() => openEdit(member)}
-            />
-          </Tooltip>
-          {member.active ? (
-            <Popconfirm
-              title="Desactivar persona"
-              description={`¿Desactivar a ${member.name}? Dejará de aparecer en las asignaciones.`}
-              okText="Sí, desactivar"
-              cancelText="Cancelar"
-              onConfirm={() => deactivateMember.mutate(member.id)}
-            >
-              <Tooltip title="Desactivar">
+      width: 170,
+      render: (_, member) => {
+        const isGeneratingThis =
+          generateLink.isPending && generateLink.variables === member.id;
+        return (
+          <Space size={2}>
+            <Tooltip title="Editar">
+              <Button
+                type="text"
+                icon={<EditOutlined />}
+                aria-label={`Editar a ${member.name}`}
+                onClick={() => openEdit(member)}
+              />
+            </Tooltip>
+            {member.telegramLinked ? (
+              <Popconfirm
+                title="Desvincular Telegram"
+                description={`¿Desvincular el Telegram de ${member.name}? Dejará de recibir alertas y recordatorios.`}
+                okText="Sí, desvincular"
+                cancelText="Cancelar"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => unlinkTelegram.mutate(member.id)}
+              >
+                <Tooltip title="Desvincular Telegram">
+                  <Button
+                    type="text"
+                    danger
+                    icon={<DisconnectOutlined />}
+                    loading={unlinkTelegram.isPending && unlinkTelegram.variables === member.id}
+                    aria-label={`Desvincular Telegram de ${member.name}`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            ) : member.telegramLinkPending ? (
+              <Popconfirm
+                title="Regenerar enlace"
+                description="¿Regenerar el enlace? El anterior dejará de funcionar."
+                okText="Sí, regenerar"
+                cancelText="Cancelar"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => handleGenerateLink(member)}
+              >
+                <Tooltip title="Regenerar enlace">
+                  <Button
+                    type="text"
+                    icon={<ReloadOutlined />}
+                    loading={isGeneratingThis}
+                    aria-label={`Regenerar enlace de Telegram para ${member.name}`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            ) : (
+              <Tooltip title="Vincular Telegram">
                 <Button
                   type="text"
-                  danger
-                  icon={<StopOutlined />}
-                  aria-label={`Desactivar a ${member.name}`}
+                  icon={<LinkOutlined />}
+                  loading={isGeneratingThis}
+                  aria-label={`Vincular Telegram de ${member.name}`}
+                  onClick={() => handleGenerateLink(member)}
                 />
               </Tooltip>
-            </Popconfirm>
-          ) : (
-            <Popconfirm
-              title="Reactivar persona"
-              description={`¿Reactivar a ${member.name}?`}
-              okText="Sí, reactivar"
-              cancelText="Cancelar"
-              onConfirm={() => activateMember.mutate(member.id)}
-            >
-              <Tooltip title="Reactivar">
-                <Button
-                  type="text"
-                  icon={<CheckCircleOutlined />}
-                  aria-label={`Reactivar a ${member.name}`}
-                />
-              </Tooltip>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+            )}
+            {member.active ? (
+              <Popconfirm
+                title="Desactivar persona"
+                description={`¿Desactivar a ${member.name}? Dejará de aparecer en las asignaciones.`}
+                okText="Sí, desactivar"
+                cancelText="Cancelar"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => deactivateMember.mutate(member.id)}
+              >
+                <Tooltip title="Desactivar">
+                  <Button
+                    type="text"
+                    danger
+                    icon={<StopOutlined />}
+                    loading={deactivateMember.isPending && deactivateMember.variables === member.id}
+                    aria-label={`Desactivar a ${member.name}`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            ) : (
+              <Popconfirm
+                title="Reactivar persona"
+                description={`¿Reactivar a ${member.name}?`}
+                okText="Sí, reactivar"
+                cancelText="Cancelar"
+                onConfirm={() => activateMember.mutate(member.id)}
+              >
+                <Tooltip title="Reactivar">
+                  <Button
+                    type="text"
+                    icon={<CheckCircleOutlined />}
+                    loading={activateMember.isPending && activateMember.variables === member.id}
+                    aria-label={`Reactivar a ${member.name}`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -188,7 +288,7 @@ export function TeamPage() {
               />
             ),
           }}
-          scroll={{ x: 700 }}
+          scroll={{ x: 760 }}
         />
       </GlassCard>
 
@@ -196,6 +296,13 @@ export function TeamPage() {
         open={modalOpen}
         member={editingMember}
         onClose={() => setModalOpen(false)}
+      />
+
+      <TelegramLinkModal
+        open={linkModal !== null}
+        linkData={linkModal?.data ?? null}
+        memberName={linkModal?.memberName ?? ''}
+        onClose={() => setLinkModal(null)}
       />
     </PageTransition>
   );

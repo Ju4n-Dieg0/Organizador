@@ -35,8 +35,11 @@ Login web: `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` del `backend/.env`.
 
 1. Crea un bot con [@BotFather](https://t.me/BotFather) y pega el token en `TELEGRAM_BOT_TOKEN`.
 2. Escríbele al bot desde tu cuenta y obtén tu chat id (p. ej. con [@userinfobot](https://t.me/userinfobot)); ponlo en `TELEGRAM_OWNER_CHAT_ID`.
-3. Para que un miembro del equipo reciba alertas, registra su `telegramChatId` en la sección Equipo
-   (el miembro debe iniciar conversación con el bot primero).
+3. Para que un miembro del equipo reciba alertas, en la sección Equipo usa **Vincular Telegram**:
+   se genera un enlace único `https://t.me/<bot>?start=<token>` (expira en 48 h, un solo uso).
+   Compárteselo al miembro; al abrirlo y tocar **Iniciar**, queda vinculado automáticamente
+   (nadie necesita ver ni copiar chat ids). Desde la misma sección puedes regenerar el enlace
+   o desvincular al miembro.
 4. Comandos disponibles (solo tu chat): `/ayuda`, `/clientes`, `/personas`, `/pendientes [cliente]`,
    `/pendiente`, `/asignar`, `/reasignar`, `/extender`, `/estado`, `/terminar`.
 5. Recordatorios automáticos según `REMINDER_CRON` (default 9:00) para entregas vencidas, de hoy y de mañana.

@@ -5,7 +5,6 @@ import type { TeamMemberResponse } from '../../types/team.types';
 
 interface TeamMemberFormValues {
   name: string;
-  telegramChatId?: string;
 }
 
 interface TeamMemberFormModalProps {
@@ -25,10 +24,7 @@ export function TeamMemberFormModal({ open, member, onClose }: TeamMemberFormMod
   useEffect(() => {
     if (!open) return;
     if (member) {
-      form.setFieldsValue({
-        name: member.name,
-        telegramChatId: member.telegramChatId ?? undefined,
-      });
+      form.setFieldsValue({ name: member.name });
     } else {
       form.resetFields();
     }
@@ -36,20 +32,13 @@ export function TeamMemberFormModal({ open, member, onClose }: TeamMemberFormMod
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
-    const chatId = values.telegramChatId?.trim();
     if (isEdit) {
       updateMember.mutate(
-        {
-          id: member.id,
-          data: { name: values.name, telegramChatId: chatId ? chatId : null },
-        },
+        { id: member.id, data: { name: values.name } },
         { onSuccess: onClose },
       );
     } else {
-      createMember.mutate(
-        { name: values.name, telegramChatId: chatId ? chatId : undefined },
-        { onSuccess: onClose },
-      );
+      createMember.mutate({ name: values.name }, { onSuccess: onClose });
     }
   };
 
@@ -69,15 +58,9 @@ export function TeamMemberFormModal({ open, member, onClose }: TeamMemberFormMod
           name="name"
           label="Nombre"
           rules={[{ required: true, message: 'El nombre es obligatorio' }]}
+          extra="Para que reciba alertas por Telegram, usa la acción «Vincular Telegram» de la tabla después de crearla."
         >
           <Input placeholder="Nombre de la persona" maxLength={120} />
-        </Form.Item>
-        <Form.Item
-          name="telegramChatId"
-          label="Chat ID de Telegram"
-          extra="Identificador del chat de Telegram donde la persona recibirá alertas de asignaciones, extensiones y recordatorios. Déjalo vacío si no quiere recibir notificaciones."
-        >
-          <Input placeholder="Ej.: 123456789" maxLength={32} />
         </Form.Item>
       </Form>
     </Modal>

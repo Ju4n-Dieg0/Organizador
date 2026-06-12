@@ -9,7 +9,11 @@ El schema autoritativo está en `backend/prisma/schema.prisma`.
 - **Plan**: `name` (único), `description?`. CRUD completo; DELETE devuelve 409 si tiene clientes.
 - **Client**: `name`, `active` (default true), `planId?`, N `ClientDriveLink {url, label?}`.
   Nunca se borra: `deactivate`/`activate`.
-- **TeamMember**: `name`, `telegramChatId?` (único), `active`. Solo recibe alertas por Telegram.
+- **TeamMember**: `name`, `telegramChatId?` (único, interno: NUNCA se expone al frontend), `active`.
+  Solo recibe alertas por Telegram. La vinculación se hace por deep link de `/start` (ver § Telegram).
+- **TelegramLinkToken**: token de vinculación de un solo uso por miembro (`memberId` único:
+  regenerar invalida el anterior). `token` (único, `crypto.randomBytes(24)` en base64url),
+  `expiresAt` (48h), `createdAt`. Se borra al usarse, al regenerar o al desvincular.
 - **Task** (pendiente): `clientId`, `title`, `description?`, `status`, `dueDate?`,
   N `TaskLink {url, label?}`, N asignados (`TaskAssignee`), historial `TaskEvent[]`.
 - **TaskEvent**: `type (CREACION|ASIGNACION|REASIGNACION|EXTENSION|CAMBIO_ESTADO)`,
@@ -55,11 +59,31 @@ PENDIENTE --assign--> ASIGNADO --complete--> TERMINADO
 | PATCH | `/api/clients/:id/activate` | — | ClientResponse |
 
 ### Team members
-| POST | `/api/team-members` | `{name, telegramChatId?}` | TeamMemberResponse |
+| POST | `/api/team-members` | `{name}` | TeamMemberResponse |
 | GET | `/api/team-members?status=active\|inactive\|all` | — | TeamMemberResponse[] |
 | GET | `/api/team-members/:id` | — | TeamMemberResponse |
-| PATCH | `/api/team-members/:id` | `{name?, telegramChatId?: string\|null}` | TeamMemberResponse |
+| PATCH | `/api/team-members/:id` | `{name?}` | TeamMemberResponse |
 | PATCH | `/api/team-members/:id/deactivate` / `activate` | — | TeamMemberResponse |
+| POST | `/api/team-members/:id/telegram-link` | — | `TelegramLinkResponse {link: string, expiresAt: string}` — genera (o regenera, invalidando el anterior) el token y arma `https://t.me/<bot_username>?start=<token>`. 503 si el bot está desactivado (sin `TELEGRAM_BOT_TOKEN`). |
+| DELETE | `/api/team-members/:id/telegram-link` | — | 204 — desvincula: borra `telegramChatId` y el token pendiente. |
+
+El `bot_username` se obtiene del bot real (`getMe()`), expuesto vía la abstracción
+`BotInfoService` del mini-módulo `backend/src/telegram-info/` (sin imports propios, mismo patrón
+registry que `TelegramSender`: `TelegramService` se registra como proveedor al iniciar).
+team-members importa `TelegramInfoModule`, nunca Telegraf ni el módulo telegram (que ya importa
+team-members; un import directo sería circular). Si no hay proveedor registrado (bot desactivado),
+`getBotUsername()` devuelve `null` y el endpoint responde 503 con mensaje claro en español.
+
+```ts
+// telegram-info/bot-info.interface.ts
+interface BotInfoProvider { getBotUsername(): Promise<string | null> }
+// BotInfoService (holder): setProvider(p) / getBotUsername(): Promise<string | null>
+```
+
+Nota interna: `NotificationsService` y `formatTeam` del bot NO usan el Response DTO para los
+chatIds: usan un método interno de `TeamMembersService` (p. ej. `findAllInternal()` →
+`{id, name, active, telegramChatId}[]`, sin pasar por el controller) y el flag `telegramLinked`
+del DTO respectivamente.
 
 ### Tasks (pendientes)
 | POST | `/api/tasks` | `{clientId, title, description?, links?: {url,label?}[]}` | TaskResponse |
@@ -87,7 +111,14 @@ interface ClientResponse {
   openTaskCount: number;           // tasks con status != TERMINADO
   createdAt: string; updatedAt: string;
 }
-interface TeamMemberResponse { id: number; name: string; telegramChatId: string | null; active: boolean; activeTaskCount: number; createdAt: string }
+interface TeamMemberResponse {
+  id: number; name: string; active: boolean; activeTaskCount: number;
+  telegramLinked: boolean;              // tiene telegramChatId guardado (el chatId crudo NUNCA se expone)
+  telegramLinkPending: boolean;         // hay token vigente sin usar
+  telegramLinkExpiresAt: string | null; // expiración del token vigente (solo si pending)
+  createdAt: string;
+}
+interface TelegramLinkResponse { link: string; expiresAt: string }
 interface TaskLinkResponse { id: number; url: string; label: string | null }
 interface TaskAssigneeResponse { memberId: number; name: string; assignedAt: string }
 interface TaskResponse {
@@ -108,6 +139,23 @@ Errores: formato Nest estándar `{statusCode, message, error}`; `message` en esp
 Solo `TELEGRAM_OWNER_CHAT_ID` ejecuta comandos (separador `|`); los `telegramChatId` de los
 miembros solo reciben alertas. Comandos: `/ayuda /clientes /personas /pendientes [cliente]
 /pendiente /asignar /reasignar /extender /estado /terminar` — ver `.claude/agents/telegram-bot.md`.
+
+### Vinculación del equipo por deep link de /start
+
+ÚNICA excepción al middleware de solo-dueño: el handler de `/start` se registra ANTES del
+middleware y acepta mensajes de cualquier chat. Todo lo demás (comandos, texto libre) sigue
+restringido al dueño.
+
+- `/start <token>` (cualquier chat): valida el token (existe y no venció; al usarse se borra →
+  un solo uso). Si es válido, guarda el `chat.id` como `telegramChatId` del miembro (vía
+  `TeamMembersService`, nunca Prisma directo desde telegram), borra el token y confirma:
+  «Listo, <nombre>: quedaste vinculado/a y recibirás recordatorios aquí».
+  - **Re-vinculación**: si ese chat ya estaba vinculado a OTRO miembro, se desvincula del
+    anterior y se vincula al nuevo (el chatId es único), avisando en la confirmación.
+    Racional: el token lo emitió el dueño a propósito; rechazar solo bloquearía correcciones.
+  - Token inválido o vencido: respuesta amable pidiendo solicitar un nuevo enlace al dueño.
+- `/start` sin token: chat del dueño → /ayuda (comportamiento previo); cualquier otro chat →
+  respuesta amable indicando que pida un enlace de vinculación al dueño.
 
 Notificaciones salientes (vía `NotificationsService`):
 - crear → dueño; asignar/reasignar/extender/terminar → dueño + asignados con chatId.

@@ -48,6 +48,7 @@ export class TelegramCommandsService {
       await next();
     });
 
+    // Solo se alcanza vía next() desde TelegramLinkService (dueño sin token).
     bot.start((ctx) => this.safe(ctx, () => this.ayuda(ctx)));
     bot.command('ayuda', (ctx) => this.safe(ctx, () => this.ayuda(ctx)));
     bot.command('clientes', (ctx) => this.safe(ctx, () => this.clientes(ctx)));

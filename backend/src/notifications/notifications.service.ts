@@ -113,7 +113,7 @@ export class NotificationsService {
       `⏰ <b>Recordatorio de pendientes</b> (${tasks.length})\n${summary}`,
     );
 
-    const members = await this.teamMembersService.findAll({ status: 'all' });
+    const members = await this.teamMembersService.findAllInternal();
     for (const member of members) {
       if (!member.telegramChatId) continue;
       const own = tasks.filter((t) =>
@@ -133,7 +133,7 @@ export class NotificationsService {
     html: string,
   ): Promise<void> {
     if (task.assignees.length === 0) return;
-    const members = await this.teamMembersService.findAll({ status: 'all' });
+    const members = await this.teamMembersService.findAllInternal();
     for (const member of members) {
       if (!member.telegramChatId) continue;
       if (!task.assignees.some((a) => a.memberId === member.id)) continue;

@@ -96,6 +96,11 @@ Para decisiones de UI/UX usa la skill `/ui-ux-pro-max`.
 - **Cliente**: nombre, plan (opcional), N links de carpeta Drive, activo/inactivo (soft toggle, nunca delete).
 - **Plan**: nombre + descripción; un plan se asocia a muchos clientes.
 - **Persona (TeamMember)**: miembro del equipo; puede tener `telegramChatId` (solo recibe alertas).
+  El chatId NUNCA se expone al frontend ni se ingresa a mano: la vinculación es por deep link
+  `https://t.me/<bot>?start=<token>` generado desde la web (`POST /api/team-members/:id/telegram-link`,
+  token de un solo uso, 48 h; `DELETE` desvincula). El handler de `/start <token>` es la única
+  excepción al middleware de solo-dueño del bot; si el chat ya estaba vinculado a otro miembro,
+  se re-vincula al nuevo avisando.
 - **Pendiente (Task)**: pertenece a un cliente; título, N links de documentos, personas asignadas (N:M), fecha de entrega.
   - Estados: `PENDIENTE → ASIGNADO → TERMINADO`, y `EXTENDIDO` (requiere razón + nueva fecha).
   - Reasignar requiere razón. Todo cambio queda en `TaskEvent` (historial auditable).

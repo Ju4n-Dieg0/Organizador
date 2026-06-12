@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Patch,
@@ -11,6 +13,7 @@ import {
 import { CreateTeamMemberDto } from './dto/create-team-member.dto';
 import { QueryTeamMembersDto } from './dto/query-team-members.dto';
 import { TeamMemberResponseDto } from './dto/team-member-response.dto';
+import { TelegramLinkResponseDto } from './dto/telegram-link-response.dto';
 import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
 import { TeamMembersService } from './team-members.service';
 
@@ -57,5 +60,18 @@ export class TeamMembersController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<TeamMemberResponseDto> {
     return this.teamMembersService.activate(id);
+  }
+
+  @Post(':id/telegram-link')
+  generateTelegramLink(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<TelegramLinkResponseDto> {
+    return this.teamMembersService.generateTelegramLink(id);
+  }
+
+  @Delete(':id/telegram-link')
+  @HttpCode(204)
+  unlinkTelegram(@Param('id', ParseIntPipe) id: number): Promise<void> {
+    return this.teamMembersService.unlinkTelegram(id);
   }
 }

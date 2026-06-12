@@ -4,6 +4,7 @@ import type {
   CreateTeamMemberRequest,
   TeamMemberResponse,
   TeamStatusFilter,
+  TelegramLinkResponse,
   UpdateTeamMemberRequest,
 } from '../types/team.types';
 
@@ -48,5 +49,16 @@ export const teamApi = {
       `${API_PATHS.teamMembers}/${id}/activate`,
     );
     return res.data;
+  },
+
+  generateTelegramLink: async (id: number): Promise<TelegramLinkResponse> => {
+    const res = await http.post<TelegramLinkResponse>(
+      `${API_PATHS.teamMembers}/${id}/telegram-link`,
+    );
+    return res.data;
+  },
+
+  unlinkTelegram: async (id: number): Promise<void> => {
+    await http.delete(`${API_PATHS.teamMembers}/${id}/telegram-link`);
   },
 };
