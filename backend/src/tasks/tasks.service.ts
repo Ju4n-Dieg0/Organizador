@@ -166,7 +166,14 @@ export class TasksService {
     return response;
   }
 
-  async complete(id: number): Promise<TaskResponseDto> {
+  /**
+   * Termina un pendiente. Con `actor` (miembro que lo termina desde Telegram)
+   * el evento registra quién fue y el dueño recibe la notificación con su nombre.
+   */
+  async complete(
+    id: number,
+    actor?: { memberId: number; memberName: string },
+  ): Promise<TaskResponseDto> {
     const task = await this.getTaskOrFail(id);
     if (task.status !== 'ASIGNADO' && task.status !== 'EXTENDIDO') {
       throw new ConflictException(
@@ -177,11 +184,18 @@ export class TasksService {
       type: 'CAMBIO_ESTADO',
       fromStatus: task.status,
       toStatus: 'TERMINADO',
-      detail: 'Pendiente terminado',
+      detail: actor
+        ? `Terminado por ${actor.memberName} vía Telegram`
+        : 'Pendiente terminado',
     });
     const response = TasksMapper.toResponse(updated);
     this.fireNotification(() =>
-      this.notificationsService.notifyTaskCompleted(response),
+      actor
+        ? this.notificationsService.notifyTaskCompletedByMember(
+            response,
+            actor.memberName,
+          )
+        : this.notificationsService.notifyTaskCompleted(response),
     );
     return response;
   }

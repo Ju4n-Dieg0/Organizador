@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+// Solo el TIPO del DTO: notifications nunca importa el módulo requests
+// (requests importa NotificationsModule; un import runtime sería circular).
+import type { TeamRequestResponseDto } from '../requests/dto/team-request-response.dto';
 import { TaskResponseDto } from '../tasks/dto/task-response.dto';
 import { TeamMembersService } from '../team-members/team-members.service';
-import { TelegramSender } from './telegram-sender.interface';
+import { TelegramSender, TelegramSendOptions } from './telegram-sender.interface';
 
 function escapeHtml(text: string): string {
   return text
@@ -33,7 +36,7 @@ export class NotificationsService {
     this.sender = sender;
   }
 
-  async sendToOwner(html: string): Promise<void> {
+  async sendToOwner(html: string, options?: TelegramSendOptions): Promise<void> {
     const ownerChatId = this.config.get<string>('TELEGRAM_OWNER_CHAT_ID');
     if (!ownerChatId) {
       this.logger.debug(
@@ -41,7 +44,7 @@ export class NotificationsService {
       );
       return;
     }
-    await this.send(ownerChatId, html);
+    await this.send(ownerChatId, html, options);
   }
 
   async sendToMember(chatId: string, html: string): Promise<void> {
@@ -103,6 +106,56 @@ export class NotificationsService {
     );
   }
 
+  /**
+   * Un miembro terminó el pendiente desde Telegram: el dueño ve quién fue
+   * y los demás asignados reciben la notificación de terminado habitual.
+   */
+  async notifyTaskCompletedByMember(
+    task: TaskResponseDto,
+    memberName: string,
+  ): Promise<void> {
+    await this.sendToOwner(
+      `✅ <b>${escapeHtml(memberName)}</b> marcó como terminado\n${this.formatTask(task)}`,
+    );
+    await this.notifyAssignees(
+      task,
+      `✅ <b>Pendiente terminado</b>\n${this.formatTask(task)}`,
+      memberName,
+    );
+  }
+
+  /** Nueva solicitud del equipo: aviso al dueño con botones Aceptar/Rechazar. */
+  async notifyRequestCreated(request: TeamRequestResponseDto): Promise<void> {
+    await this.sendToOwner(
+      `📨 <b>Nueva solicitud #${request.id}</b>\n${escapeHtml(request.summary)}`,
+      {
+        inlineKeyboard: [
+          [
+            { text: 'Aceptar', callbackData: `req:approve:${request.id}` },
+            { text: 'Rechazar', callbackData: `req:reject:${request.id}` },
+          ],
+        ],
+      },
+    );
+  }
+
+  /** Solicitud resuelta: aviso al solicitante por su chat vinculado (si lo tiene). */
+  async notifyRequestResolved(request: TeamRequestResponseDto): Promise<void> {
+    const members = await this.teamMembersService.findAllInternal();
+    const requester = members.find((m) => m.id === request.requester.id);
+    if (!requester?.telegramChatId) {
+      this.logger.debug(
+        `Solicitante #${request.requester.id} sin chat vinculado: se omite la notificación de la solicitud #${request.id}`,
+      );
+      return;
+    }
+    const html =
+      request.status === 'APROBADA'
+        ? `✅ Tu solicitud fue aprobada: ${escapeHtml(request.summary)}`
+        : `❌ Tu solicitud fue rechazada: ${escapeHtml(request.summary)}\nRazón: ${escapeHtml(request.rejectionReason ?? '')}`;
+    await this.sendToMember(requester.telegramChatId, html);
+  }
+
   /** Resumen al dueño + alerta individual a cada asignado con chatId. */
   async notifyReminders(tasks: TaskResponseDto[]): Promise<void> {
     if (tasks.length === 0) {
@@ -131,12 +184,14 @@ export class NotificationsService {
   private async notifyAssignees(
     task: TaskResponseDto,
     html: string,
+    excludeMemberName?: string,
   ): Promise<void> {
     if (task.assignees.length === 0) return;
     const members = await this.teamMembersService.findAllInternal();
     for (const member of members) {
       if (!member.telegramChatId) continue;
       if (!task.assignees.some((a) => a.memberId === member.id)) continue;
+      if (excludeMemberName && member.name === excludeMemberName) continue;
       await this.sendToMember(member.telegramChatId, html);
     }
   }
@@ -186,7 +241,11 @@ export class NotificationsService {
     return '';
   }
 
-  private async send(chatId: string, html: string): Promise<void> {
+  private async send(
+    chatId: string,
+    html: string,
+    options?: TelegramSendOptions,
+  ): Promise<void> {
     if (!this.sender) {
       this.logger.debug(
         'Bot de Telegram desactivado: se omite el envío de la notificación',
@@ -194,7 +253,7 @@ export class NotificationsService {
       return;
     }
     try {
-      await this.sender.sendMessage(chatId, html);
+      await this.sender.sendMessage(chatId, html, options);
     } catch (err) {
       this.logger.error(
         `Error enviando mensaje de Telegram a ${chatId}: ${err instanceof Error ? err.message : String(err)}`,

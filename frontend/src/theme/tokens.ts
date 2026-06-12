@@ -61,6 +61,31 @@ export const taskStatusColor = {
   EXTENDIDO: colors.warning,
 } as const;
 
+/**
+ * Color semántico por tipo de solicitud del equipo:
+ * CREAR_PENDIENTE=accent, EXTENSION=warning, REASIGNACION=info,
+ * CAMBIO_ESTADO=textMuted (neutro: el verde queda reservado para éxito
+ * semántico, MASTER §Color, y un cambio puede ser a cualquier estado).
+ */
+export const requestTypeColor = {
+  CREAR_PENDIENTE: colors.accent,
+  EXTENSION: colors.warning,
+  REASIGNACION: colors.info,
+  CAMBIO_ESTADO: colors.textMuted,
+} as const;
+
+/**
+ * Color semántico por estado de solicitud:
+ * PENDIENTE=warning, APROBADA=success, RECHAZADA=error.
+ * Ojo: PENDIENTE aquí es warning (exige acción del dueño), a diferencia de
+ * taskStatusColor.PENDIENTE=textMuted (estado de reposo) — es intencional.
+ */
+export const requestStatusColor = {
+  PENDIENTE: colors.warning,
+  APROBADA: colors.success,
+  RECHAZADA: colors.error,
+} as const;
+
 export const fonts = {
   body: "'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif",
   heading: "'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif",

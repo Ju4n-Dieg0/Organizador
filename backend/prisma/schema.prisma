@@ -51,6 +51,7 @@ model TeamMember {
   active         Boolean            @default(true)
   assignments    TaskAssignee[]
   linkToken      TelegramLinkToken?
+  requests       TeamRequest[]
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 }
@@ -90,6 +91,7 @@ model Task {
   links       TaskLink[]
   assignees   TaskAssignee[]
   events      TaskEvent[]
+  requests    TeamRequest[]
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -114,6 +116,37 @@ model TaskAssignee {
   member     TeamMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@id([taskId, memberId])
+}
+
+enum RequestType {
+  CREAR_PENDIENTE
+  EXTENSION
+  REASIGNACION
+  CAMBIO_ESTADO
+}
+
+enum RequestStatus {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+model TeamRequest {
+  id              Int           @id @default(autoincrement())
+  type            RequestType
+  status          RequestStatus @default(PENDIENTE)
+  requesterId     Int
+  requester       TeamMember    @relation(fields: [requesterId], references: [id])
+  taskId          Int?
+  task            Task?         @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  payload         Json
+  rejectionReason String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([status])
 }
 
 model TaskEvent {

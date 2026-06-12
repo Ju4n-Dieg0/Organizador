@@ -8,6 +8,7 @@ import { ClientDetailPage } from './pages/ClientDetailPage';
 import { PlansPage } from './pages/PlansPage';
 import { TeamPage } from './pages/TeamPage';
 import { TasksPage } from './pages/TasksPage';
+import { RequestsPage } from './pages/RequestsPage';
 import { ROUTES } from './constants/routes';
 
 export function App() {
@@ -27,6 +28,7 @@ export function App() {
         <Route path={ROUTES.plans} element={<PlansPage />} />
         <Route path={ROUTES.team} element={<TeamPage />} />
         <Route path={ROUTES.tasks} element={<TasksPage />} />
+        <Route path={ROUTES.requests} element={<RequestsPage />} />
       </Route>
       <Route path="*" element={<LoginPage />} />
     </Routes>

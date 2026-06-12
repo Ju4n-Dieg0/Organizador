@@ -7,12 +7,17 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Telegraf } from 'telegraf';
 import { NotificationsService } from '../notifications/notifications.service';
-import { TelegramSender } from '../notifications/telegram-sender.interface';
+import {
+  TelegramSender,
+  TelegramSendOptions,
+} from '../notifications/telegram-sender.interface';
 import { BotInfoProvider } from '../telegram-info/bot-info.interface';
 import { BotInfoService } from '../telegram-info/bot-info.service';
 import { TelegramCommandsService } from './telegram-commands.service';
 import { TelegramConversationService } from './telegram-conversation.service';
 import { TelegramLinkService } from './telegram-link.service';
+import { TelegramRequestsService } from './telegram-requests.service';
+import { TelegramTeamConversationService } from './telegram-team-conversation.service';
 
 @Injectable()
 export class TelegramService
@@ -25,7 +30,9 @@ export class TelegramService
   constructor(
     private readonly config: ConfigService,
     private readonly linkService: TelegramLinkService,
+    private readonly teamConversationService: TelegramTeamConversationService,
     private readonly commandsService: TelegramCommandsService,
+    private readonly requestsService: TelegramRequestsService,
     private readonly conversationService: TelegramConversationService,
     private readonly notificationsService: NotificationsService,
     private readonly botInfoService: BotInfoService,
@@ -43,8 +50,14 @@ export class TelegramService
     this.bot = new Telegraf(token);
     // ANTES del middleware de solo-dueño: /start <token> acepta cualquier chat.
     this.linkService.register(this.bot);
+    // También antes: texto libre de chats vinculados a un miembro (hace
+    // next() para el dueño y para chats desconocidos).
+    this.teamConversationService.register(this.bot);
     this.commandsService.register(this.bot);
-    // Después de los comandos: el middleware de dueño ya cubre el texto libre.
+    // Después del middleware de dueño y antes del texto libre del dueño:
+    // callbacks Aceptar/Rechazar y captura de la razón de rechazo.
+    this.requestsService.register(this.bot);
+    // Al final: el modo conversacional del dueño consume el texto restante.
     this.conversationService.register(this.bot);
     this.notificationsService.setSender(this);
     this.botInfoService.setProvider(this);
@@ -81,13 +94,26 @@ export class TelegramService
     return this.cachedBotUsername;
   }
 
-  async sendMessage(chatId: string, html: string): Promise<void> {
+  async sendMessage(
+    chatId: string,
+    html: string,
+    options?: TelegramSendOptions,
+  ): Promise<void> {
     if (!this.bot) {
       return;
     }
     await this.bot.telegram.sendMessage(chatId, html, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+      ...(options?.inlineKeyboard
+        ? {
+            reply_markup: {
+              inline_keyboard: options.inlineKeyboard.map((row) =>
+                row.map((b) => ({ text: b.text, callback_data: b.callbackData })),
+              ),
+            },
+          }
+        : {}),
     });
   }
 }

@@ -19,6 +19,14 @@ El schema autoritativo está en `backend/prisma/schema.prisma`.
 - **TaskEvent**: `type (CREACION|ASIGNACION|REASIGNACION|EXTENSION|CAMBIO_ESTADO)`,
   `fromStatus?`, `toStatus?`, `reason?`, `detail?`, `createdAt`. Toda mutación de estado/asignación
   crea su evento **en la misma transacción**.
+- **TeamRequest** (solicitud del equipo): petición de un miembro vinculado por Telegram que
+  requiere aprobación del dueño. `type (CREAR_PENDIENTE|EXTENSION|REASIGNACION|CAMBIO_ESTADO)`,
+  `status (PENDIENTE|APROBADA|RECHAZADA, default PENDIENTE)`, `requesterId` (TeamMember),
+  `taskId?` (nullable: CREAR_PENDIENTE no afecta un pendiente existente; si el Task se borra,
+  `SetNull`), `payload Json` (datos propuestos, tipado y validado al crear — ver abajo),
+  `rejectionReason?` (OBLIGATORIA al rechazar), `resolvedBy?` (texto: nombre del usuario web o
+  `"Dueño (Telegram)"`), `resolvedAt?`, `createdAt`, `updatedAt`. `@@index([status])`.
+  Las solicitudes NUNCA se borran; son historial auditable.
 
 ### Estados y transiciones de Task
 
@@ -31,7 +39,10 @@ PENDIENTE --assign--> ASIGNADO --complete--> TERMINADO
 - `assign`: requiere ≥1 `memberIds` y `dueDate`. Evento ASIGNACION.
 - `reassign`: permitido en ASIGNADO/EXTENDIDO; requiere `reason`. Reemplaza asignados. Evento REASIGNACION (detail = "de X a Y").
 - `extend`: requiere `reason` y `newDueDate`. Evento EXTENSION.
-- `complete`: permitido en ASIGNADO/EXTENDIDO. Evento CAMBIO_ESTADO.
+- `complete`: permitido en ASIGNADO/EXTENDIDO. Evento CAMBIO_ESTADO. Acepta un actor opcional
+  (`complete(id, actor?: { memberId: number; memberName: string })`): cuando lo ejecuta un
+  miembro desde Telegram, el evento lleva `detail = "Terminado por <nombre> vía Telegram"` y la
+  notificación al dueño dice «<nombre> marcó como terminado …» (sin actor, comportamiento previo).
 - `status` genérico: valida transiciones permitidas; si `toStatus = EXTENDIDO` exige `reason`.
 - Transición inválida → 409 Conflict con mensaje en español.
 
@@ -96,6 +107,30 @@ del DTO respectivamente.
 | POST | `/api/tasks/:id/complete` | — | TaskResponse |
 | POST | `/api/tasks/:id/status` | `{status, reason?}` | TaskResponse |
 
+### Team requests (solicitudes del equipo) — módulo `backend/src/requests/`
+
+| Método | Ruta | Body | Respuesta |
+|--------|------|------|-----------|
+| GET | `/api/requests?status=PENDIENTE\|APROBADA\|RECHAZADA\|all` | — | TeamRequestResponse[] (default: `all`, orden `createdAt` desc) |
+| GET | `/api/requests/:id` | — | TeamRequestResponse |
+| POST | `/api/requests/:id/approve` | — | TeamRequestResponse |
+| POST | `/api/requests/:id/reject` | `{reason: string}` (no vacía) | TeamRequestResponse |
+
+- Las solicitudes solo se CREAN desde el bot de Telegram (no hay POST REST de creación):
+  `RequestsService.create(...)` valida el payload campo a campo contra el tipo (cliente activo,
+  miembros activos, fechas `YYYY-MM-DD`, razones no vacías) antes de persistir.
+- `approve` ejecuta la operación real **vía los services existentes** (`TasksService.create/assign`,
+  `extend`, `reassign`, `changeStatus`) — mismos `TaskEvent`, mismas razones obligatorias y
+  validación de transiciones — y luego marca la solicitud. Si la operación real falla
+  (p. ej. transición inválida), la solicitud queda PENDIENTE y se propaga el error.
+- **Idempotencia**: `approve`/`reject` sobre una solicitud ya resuelta → 409 Conflict con mensaje
+  «Esta solicitud ya fue aprobada/rechazada». La web y los botones de Telegram comparten
+  exactamente el mismo service (`RequestsService.approve(id, resolvedBy)` /
+  `reject(id, reason, resolvedBy)`).
+- Al crear → notificación al dueño con resumen + botones inline Aceptar/Rechazar.
+  Al resolver → notificación al miembro solicitante por su chat vinculado
+  (aprobada / rechazada con la razón). Ver § Telegram.
+
 ## Response DTOs (espejo exacto en `frontend/src/types/`)
 
 ```ts
@@ -130,15 +165,89 @@ interface TaskResponse {
 }
 interface TaskEventResponse { id: number; type: TaskEventType; fromStatus: TaskStatus | null; toStatus: TaskStatus | null; reason: string | null; detail: string | null; createdAt: string }
 interface TaskDetailResponse extends TaskResponse { events: TaskEventResponse[] }
+
+type TeamRequestType = 'CREAR_PENDIENTE' | 'EXTENSION' | 'REASIGNACION' | 'CAMBIO_ESTADO';
+type TeamRequestStatus = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
+
+// Payload tipado (se persiste como Json validado; el mapper lo devuelve tipado):
+type TeamRequestPayload =
+  | { kind: 'CREAR_PENDIENTE'; clientId: number; clientName: string; title: string;
+      memberIds: number[]; memberNames: string[]; dueDate: string | null }   // con memberIds+dueDate, approve crea Y asigna
+  | { kind: 'EXTENSION'; newDueDate: string; reason: string }
+  | { kind: 'REASIGNACION'; memberIds: number[]; memberNames: string[]; reason: string }
+  | { kind: 'CAMBIO_ESTADO'; status: TaskStatus; reason: string | null };
+
+interface TeamRequestResponse {
+  id: number; type: TeamRequestType; status: TeamRequestStatus;
+  requester: { id: number; name: string };
+  task: { id: number; title: string; clientName: string; status: TaskStatus } | null;
+  payload: TeamRequestPayload;
+  summary: string;                  // resumen humano en español que arma el backend (única fuente: web y Telegram muestran el mismo)
+  rejectionReason: string | null;
+  resolvedBy: string | null; resolvedAt: string | null;
+  createdAt: string; updatedAt: string;
+}
 ```
 
 Errores: formato Nest estándar `{statusCode, message, error}`; `message` en español.
 
 ## Telegram
 
-Solo `TELEGRAM_OWNER_CHAT_ID` ejecuta comandos (separador `|`); los `telegramChatId` de los
-miembros solo reciben alertas. Comandos: `/ayuda /clientes /personas /pendientes [cliente]
-/pendiente /asignar /reasignar /extender /estado /terminar` — ver `.claude/agents/telegram-bot.md`.
+Roles por chat:
+
+- **Dueño** (`TELEGRAM_OWNER_CHAT_ID`): comandos completos (separador `|`) + texto libre con
+  todas las operaciones. Comandos: `/ayuda /clientes /personas /pendientes [cliente]
+  /pendiente /asignar /reasignar /extender /estado /terminar` — ver `.claude/agents/telegram-bot.md`.
+- **Miembro vinculado** (`telegramChatId` en TeamMember): recibe alertas/recordatorios Y habla
+  con el bot en **texto libre** (modo conversacional de equipo, ver § IA) con capacidades
+  RESTRINGIDAS. Los comandos slash NO están disponibles para miembros (si envían uno, el bot
+  responde amable que le escriban en lenguaje natural).
+- **Chat no vinculado y no dueño**: rechazado como hasta ahora (solo `/start <token>` para vincular).
+
+### Capacidades del modo conversacional de equipo
+
+1. **Consultas (solo lectura, respuesta inmediata)**: sus propios pendientes y los pendientes de
+   un cliente concreto. NO puede listar clientes ni personas completos.
+2. **Terminar un pendiente (directo, sin aprobación)**: ejecuta `TasksService.complete` con actor;
+   el `TaskEvent` registra que lo hizo ese miembro y el dueño recibe
+   «<nombre> marcó como terminado "<título>"».
+3. **Solicitudes (requieren aprobación)**: nuevo pendiente, extensión, reasignación y cambio de
+   estado distinto de terminar → crean un `TeamRequest`. El bot confirma lo entendido con el
+   miembro ANTES de enviar la solicitud (multi-turno, fuzzy matching con «¿te refieres a…?»,
+   igual de amigable que el modo del dueño).
+
+Los pendientes propios/del cliente se referencian por título (fuzzy, `TelegramResolverService`
+extendido a tareas) — nunca se piden IDs. Validación de alcance SIEMPRE en la capa telegram:
+un miembro solo puede terminar/solicitar sobre pendientes en los que está asignado
+(consultas de cliente sí abarcan todos los pendientes de ese cliente).
+
+### Flujo de aprobación de solicitudes
+
+- Al crearse un `TeamRequest`: el dueño recibe el `summary` + botones inline
+  **Aceptar / Rechazar** (callback data `req:approve:<id>` / `req:reject:<id>`).
+- **Aceptar** → `RequestsService.approve(id, 'Dueño (Telegram)')` (mismo service que la web).
+- **Rechazar** → el bot pide la razón en el siguiente mensaje del chat del dueño (estado
+  multi-turno que se intercepta ANTES del handler de IA; «cancela» descarta) y llama
+  `RequestsService.reject(id, reason, 'Dueño (Telegram)')`.
+- **Idempotencia**: si ya fue resuelta (p. ej. desde la web), el callback responde
+  «esta solicitud ya fue aprobada/rechazada» (el 409 del service se traduce a respuesta amable).
+- Al resolverse (web o Telegram): el miembro recibe «Tu solicitud fue aprobada ✅» /
+  «Tu solicitud fue rechazada ❌: <razón>» en su chat vinculado.
+
+`TelegramSender` se extiende para soportar botones:
+
+```ts
+interface TelegramSender {
+  sendMessage(chatId: string, html: string, options?: {
+    inlineKeyboard?: { text: string; callbackData: string }[][];
+  }): Promise<void>;
+}
+```
+
+`NotificationsService` agrega: `notifyTaskCompletedByMember(task, memberName)`,
+`notifyRequestCreated(request: TeamRequestResponse)` (dueño, con botones) y
+`notifyRequestResolved(request)` (miembro solicitante; resuelve su chatId vía
+`TeamMembersService.findAllInternal()`, igual que las alertas existentes).
 
 ### Vinculación del equipo por deep link de /start
 
@@ -164,7 +273,8 @@ Notificaciones salientes (vía `NotificationsService`):
 
 ## IA conversacional (LM Studio)
 
-El bot acepta **texto libre** (sin slash) SOLO del chat del dueño. El texto se interpreta con
+El bot acepta **texto libre** del chat del dueño (todas las operaciones) y de los chats de
+miembros vinculados (operaciones restringidas, ver § Contrato de equipo). El texto se interpreta con
 LM Studio (API compatible OpenAI, `POST {LMSTUDIO_BASE_URL}/chat/completions`) y se transforma
 en una LISTA de intenciones estructuradas que se ejecutan contra los services existentes (misma
 lógica de negocio que los comandos: TaskEvent, razones obligatorias, transiciones validadas).
@@ -209,8 +319,52 @@ type AiIntentResult =
 interface AiService {
   isEnabled(): boolean;
   interpret(text: string, context: AiContext): Promise<AiIntentResult>;
+  interpretTeam(text: string, context: AiTeamContext): Promise<AiTeamIntentResult>;
 }
 ```
+
+### Contrato de equipo (`interpretTeam`)
+
+Prompt y set de operaciones SEPARADOS del modo dueño (el modelo de equipo nunca ve operaciones
+que el miembro no puede pedir). `ai/` sigue sin tocar Prisma: telegram arma el contexto.
+
+```ts
+interface AiTeamContext {
+  memberName: string;                          // quién habla
+  clients: { id: number; name: string }[];     // activos (para consultas/solicitudes por cliente)
+  members: { id: number; name: string }[];     // activos (para reasignaciones por nombre)
+  myTasks: { id: number; title: string; clientName: string;
+             status: TaskStatus; dueDate: string | null }[];  // pendientes abiertos del miembro
+  today: string;                               // YYYY-MM-DD
+}
+
+// taskId solo si el modelo lo toma de myTasks; taskRef = título en texto libre.
+// La capa telegram SIEMPRE valida el alcance (taskId ∈ myTasks) y resuelve taskRef
+// por fuzzy matching con confirmación; nunca confía ciegamente en el modelo.
+type AiTeamIntent =
+  | { operation: 'mis_pendientes' }
+  | { operation: 'pendientes_cliente'; clientName?: string }
+  | { operation: 'terminar'; taskId?: number; taskRef?: string }
+  | { operation: 'solicitar_pendiente'; clientName?: string; title?: string;
+      memberNames?: string[]; dueDate?: string }
+  | { operation: 'solicitar_extension'; taskId?: number; taskRef?: string;
+      newDueDate?: string; reason?: string }
+  | { operation: 'solicitar_reasignacion'; taskId?: number; taskRef?: string;
+      memberNames?: string[]; reason?: string }
+  | { operation: 'solicitar_cambio_estado'; taskId?: number; taskRef?: string;
+      status?: TaskStatus; reason?: string }
+  | { operation: 'ayuda' }
+  | { operation: 'charla' }
+  | { operation: 'desconocida' };
+
+type AiTeamIntentResult =
+  | { kind: 'intents'; intents: AiTeamIntent[] }
+  | { kind: 'smalltalk' } | { kind: 'unknown' } | { kind: 'error' };
+```
+
+Misma estrategia de implementación que el modo dueño (intento sin `response_format`, reintento
+con `json_schema` strict, validación tolerante con whitelist de campos y normalización de
+operaciones inventadas por sinónimos, p. ej. `pedir_extension`→`solicitar_extension`).
 
 Implementación (`fetch` nativo, sin dependencias nuevas, calibrada contra phi-3-mini):
 
@@ -229,8 +383,10 @@ Implementación (`fetch` nativo, sin dependencias nuevas, calibrada contra phi-3
 
 ### Reglas del handler de texto libre (Telegram)
 
-- Misma restricción de seguridad que los comandos (`TELEGRAM_OWNER_CHAT_ID`); los textos que
-  empiezan con `/` no pasan por la IA.
+- El texto libre del dueño usa `interpret` (todas las operaciones); el de un chat vinculado a un
+  miembro usa `interpretTeam` (capacidades restringidas; el handler de equipo se registra ANTES
+  del middleware de solo-dueño y hace `next()` si el chat no es de un miembro). Cualquier otro
+  chat sigue rechazado. Los textos que empiezan con `/` no pasan por la IA.
 - **Nunca se piden IDs de cliente ni de persona**: todo se resuelve por nombre vía
   `TelegramResolverService` con fuzzy matching (normaliza acentos/mayúsculas, substring,
   distancia de edición). Contrato del resolver:

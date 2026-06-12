@@ -35,7 +35,7 @@ Login web: `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` del `backend/.env`.
 
 1. Crea un bot con [@BotFather](https://t.me/BotFather) y pega el token en `TELEGRAM_BOT_TOKEN`.
 2. Escríbele al bot desde tu cuenta y obtén tu chat id (p. ej. con [@userinfobot](https://t.me/userinfobot)); ponlo en `TELEGRAM_OWNER_CHAT_ID`.
-3. Para que un miembro del equipo reciba alertas, en la sección Equipo usa **Vincular Telegram**:
+3. Para vincular a un miembro del equipo, en la sección Equipo usa **Vincular Telegram**:
    se genera un enlace único `https://t.me/<bot>?start=<token>` (expira en 48 h, un solo uso).
    Compárteselo al miembro; al abrirlo y tocar **Iniciar**, queda vinculado automáticamente
    (nadie necesita ver ni copiar chat ids). Desde la misma sección puedes regenerar el enlace
@@ -46,11 +46,38 @@ Login web: `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` del `backend/.env`.
 
 Sin token configurado, el bot y los recordatorios se desactivan solos y la web funciona normal.
 
+### Qué puede hacer el equipo por Telegram
+
+Los miembros **vinculados** no solo reciben alertas: pueden hablarle al bot en lenguaje natural
+(requiere LM Studio, ver abajo). Sus capacidades son acotadas:
+
+- **Consultar** sus propios pendientes («¿qué pendientes tengo?») y los de un cliente
+  («¿qué hay de ToGrow?»). No pueden listar clientes ni personas completos.
+- **Terminar** un pendiente propio («ya terminé el reel de ToGrow»): se aplica de inmediato,
+  el historial registra que lo hizo ese miembro y el dueño recibe la notificación
+  («Andrea marcó como terminado…»).
+- **Solicitar** todo lo demás — pendiente nuevo, extensión de fecha, reasignación a otra
+  persona, cambio de estado distinto de terminar. El bot confirma lo entendido con el miembro
+  y crea una **solicitud** pendiente de aprobación.
+
+### Flujo de aprobación de solicitudes
+
+1. Al crearse una solicitud, el dueño la recibe en su chat con un resumen y botones
+   **Aceptar / Rechazar** (también aparece en la web: página **Solicitudes** y panel del Dashboard).
+2. **Aceptar** ejecuta la operación real con la misma lógica de negocio de siempre
+   (historial `TaskEvent`, razones obligatorias, transiciones validadas).
+   **Rechazar** pide la razón (obligatoria) en el siguiente mensaje.
+3. El miembro recibe el resultado en su chat: «Tu solicitud fue aprobada ✅» o
+   «rechazada ❌: <razón>».
+4. Web y Telegram comparten el mismo flujo: si la solicitud ya se resolvió por un lado,
+   el otro responde que ya fue aprobada/rechazada (sin efectos dobles).
+
 ## Bot conversacional (LM Studio)
 
-Además de los comandos slash, el bot entiende **lenguaje natural** (solo desde el chat del dueño):
-escribe lo que necesitas y un LLM local vía [LM Studio](https://lmstudio.ai) lo transforma en una
-o **varias** intenciones estructuradas que se ejecutan con la misma lógica de negocio que los
+Además de los comandos slash, el bot entiende **lenguaje natural** desde el chat del dueño
+(todas las operaciones) y desde los chats de miembros vinculados (capacidades restringidas, ver
+arriba): escribe lo que necesitas y un LLM local vía [LM Studio](https://lmstudio.ai) lo transforma
+en una o **varias** intenciones estructuradas que se ejecutan con la misma lógica de negocio que los
 comandos (historial `TaskEvent`, razones obligatorias para reasignar/extender, validación de
 transiciones). Clientes y personas se indican **siempre por nombre** (el bot nunca pide sus IDs):
 si el nombre no coincide exactamente, busca parecidos (acentos, mayúsculas, errores de tipeo) y

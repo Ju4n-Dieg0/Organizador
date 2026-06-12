@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Context } from 'telegraf';
 import { ClientResponseDto } from '../clients/dto/client-response.dto';
 import { ClientsService } from '../clients/clients.service';
+import { TaskResponseDto } from '../tasks/dto/task-response.dto';
 import { TeamMemberResponseDto } from '../team-members/dto/team-member-response.dto';
 import { TeamMembersService } from '../team-members/team-members.service';
 import { escapeHtml, replyHtml, UsageError } from './telegram-format';
@@ -140,6 +141,29 @@ export class TelegramResolverService {
       status: 'active',
     });
     return matchByName(name, members);
+  }
+
+  /**
+   * Resolución fuzzy de una TAREA por título dentro de una lista dada (el
+   * caller define el alcance, p. ej. solo las tareas asignadas al miembro).
+   * Puro y síncrono: no responde ni toca services.
+   */
+  findTaskByTitle(
+    query: string,
+    tasks: TaskResponseDto[],
+  ): NameResolution<TaskResponseDto> {
+    const wrapped = tasks.map((task) => ({ name: task.title, task }));
+    const res = matchByName(query, wrapped);
+    switch (res.kind) {
+      case 'match':
+        return { kind: 'match', entity: res.entity.task };
+      case 'suggestion':
+        return { kind: 'suggestion', entity: res.entity.task };
+      case 'ambiguous':
+        return { kind: 'ambiguous', options: res.options.map((o) => o.task) };
+      case 'none':
+        return { kind: 'none' };
+    }
   }
 
   /** Resuelve un cliente activo para los comandos slash (UX con respuestas). */

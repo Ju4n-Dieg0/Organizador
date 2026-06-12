@@ -6,6 +6,7 @@ export const ROUTES = {
   plans: '/planes',
   team: '/equipo',
   tasks: '/pendientes',
+  requests: '/solicitudes',
 } as const;
 
 export const clientDetailPath = (id: number): string => `/clientes/${id}`;

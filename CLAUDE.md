@@ -104,9 +104,16 @@ Para decisiones de UI/UX usa la skill `/ui-ux-pro-max`.
 - **Pendiente (Task)**: pertenece a un cliente; título, N links de documentos, personas asignadas (N:M), fecha de entrega.
   - Estados: `PENDIENTE → ASIGNADO → TERMINADO`, y `EXTENDIDO` (requiere razón + nueva fecha).
   - Reasignar requiere razón. Todo cambio queda en `TaskEvent` (historial auditable).
+- **Solicitud (TeamRequest)**: petición de un miembro vinculado que requiere aprobación del dueño.
+  Tipos `CREAR_PENDIENTE | EXTENSION | REASIGNACION | CAMBIO_ESTADO`; estados
+  `PENDIENTE | APROBADA | RECHAZADA` (rechazar exige razón). Aprobar ejecuta la operación real
+  vía los services de tasks (mismos `TaskEvent`); web (`/api/requests`, página Solicitudes +
+  panel en Dashboard) y Telegram (botones inline Aceptar/Rechazar) comparten el MISMO service,
+  con resolución idempotente (la segunda vía responde «ya fue aprobada/rechazada»). Al resolverse
+  se notifica al miembro por su chat. Nunca se borran (historial auditable). Módulo `requests/`.
 - **Telegram**: solo el chat del dueño (`TELEGRAM_OWNER_CHAT_ID`) ejecuta comandos
   (`/pendiente`, `/asignar`, `/reasignar`, `/estado`, `/extender`, `/terminar`, `/pendientes`, `/clientes`, `/personas`, `/ayuda`).
-  Los chats del equipo SOLO reciben alertas y recordatorios (cron `REMINDER_CRON`, default 9:00).
+  Los chats del equipo reciben alertas y recordatorios (cron `REMINDER_CRON`, default 9:00).
   El chat del dueño también acepta **texto libre** (modo conversacional): el módulo `ai/` lo
   interpreta con LM Studio como una LISTA de intenciones (un mensaje puede traer varias) y las
   ejecuta contra los services existentes (misma lógica de negocio, mismos `TaskEvent` y razones
@@ -116,6 +123,13 @@ Para decisiones de UI/UX usa la skill `/ui-ux-pro-max`.
   prompt está calibrado contra phi-3-mini (few-shot ≤6 pares, `json_schema` solo como reintento:
   el constrained decoding degrada a modelos pequeños). Si falta `LMSTUDIO_BASE_URL`, el modo se
   desactiva solo y el bot sugiere `/ayuda`.
+  Los chats de **miembros vinculados** también hablan en texto libre (`AiService.interpretTeam`,
+  prompt y set de operaciones SEPARADOS del dueño) con capacidades acotadas: consultar sus
+  pendientes y los de un cliente, terminar un pendiente propio (directo, con actor en el
+  `TaskEvent` y aviso al dueño «X marcó como terminado…»), y **solicitar** lo demás (crea
+  `TeamRequest`; el bot confirma lo entendido antes de enviar). Las tareas se referencian por
+  título con fuzzy matching (nunca por ID) y el alcance se valida SIEMPRE en la capa telegram.
+  Chats no vinculados y no dueño siguen rechazados.
 
 Contrato API completo: `docs/SPEC.md`. Schema: `backend/prisma/schema.prisma`.
 

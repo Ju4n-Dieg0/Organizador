@@ -14,4 +14,5 @@ export const API_PATHS = {
   clients: '/clients',
   teamMembers: '/team-members',
   tasks: '/tasks',
+  requests: '/requests',
 } as const;

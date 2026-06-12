@@ -6,11 +6,13 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 export interface JwtPayload {
   sub: number;
   email: string;
+  name?: string;
 }
 
 export interface RequestUser {
   userId: number;
   email: string;
+  name: string;
 }
 
 @Injectable()
@@ -24,6 +26,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   validate(payload: JwtPayload): RequestUser {
-    return { userId: payload.sub, email: payload.email };
+    // Tokens emitidos antes de incluir `name` siguen siendo válidos.
+    return {
+      userId: payload.sub,
+      email: payload.email,
+      name: payload.name ?? payload.email,
+    };
   }
 }

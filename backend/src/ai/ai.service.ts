@@ -3,10 +3,15 @@ import { ConfigService } from '@nestjs/config';
 import { TASK_STATUSES } from '../tasks/dto/task-response.dto';
 import {
   AI_OPERATIONS,
+  AI_TEAM_OPERATIONS,
   AiContext,
   AiIntent,
   AiIntentResult,
   AiOperation,
+  AiTeamContext,
+  AiTeamIntent,
+  AiTeamIntentResult,
+  AiTeamOperation,
 } from './ai-intent.types';
 import {
   buildSystemPrompt,
@@ -14,6 +19,11 @@ import {
   FEW_SHOT_MESSAGES,
   INTENTS_JSON_SCHEMA,
 } from './ai-prompt';
+import {
+  buildTeamSystemPrompt,
+  TEAM_FEW_SHOT_MESSAGES,
+  TEAM_INTENTS_JSON_SCHEMA,
+} from './ai-team-prompt';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_TOKENS = 600;
@@ -33,6 +43,20 @@ const OPERATION_FIELDS: Record<AiOperation, string[]> = {
   listar_pendientes: ['clientName'],
   listar_clientes: [],
   listar_personas: [],
+  ayuda: [],
+  charla: [],
+  desconocida: [],
+};
+
+/** Campos permitidos por operación del modo de EQUIPO. */
+const TEAM_OPERATION_FIELDS: Record<AiTeamOperation, string[]> = {
+  mis_pendientes: [],
+  pendientes_cliente: ['clientName'],
+  terminar: ['taskId', 'taskRef'],
+  solicitar_pendiente: ['clientName', 'title', 'memberNames', 'dueDate'],
+  solicitar_extension: ['taskId', 'taskRef', 'newDueDate', 'reason'],
+  solicitar_reasignacion: ['taskId', 'taskRef', 'memberNames', 'reason'],
+  solicitar_cambio_estado: ['taskId', 'taskRef', 'status', 'reason'],
   ayuda: [],
   charla: [],
   desconocida: [],
@@ -92,13 +116,60 @@ export class AiService {
       ...FEW_SHOT_MESSAGES,
       { role: 'user', content: text },
     ];
+    return this.runInterpretation(messages, INTENTS_JSON_SCHEMA, (content) =>
+      this.toResult(content, context),
+    );
+  }
 
-    // Intento 1: sin salida estructurada (mejor calidad con phi-3-mini).
-    const first = await this.requestCompletion(messages, false);
+  /**
+   * Interpreta texto libre de un MIEMBRO del equipo (capacidades
+   * restringidas: consultas propias/por cliente, terminar y solicitudes).
+   * Misma estrategia de dos intentos que `interpret`, con prompt, schema,
+   * whitelist de campos y sinónimos de operación propios del modo de equipo.
+   */
+  async interpretTeam(
+    text: string,
+    context: AiTeamContext,
+  ): Promise<AiTeamIntentResult> {
+    if (!this.isEnabled()) {
+      this.logger.warn(
+        'LMSTUDIO_BASE_URL no configurada: el modo conversacional está desactivado',
+      );
+      return { kind: 'error' };
+    }
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: buildTeamSystemPrompt(context) },
+      ...TEAM_FEW_SHOT_MESSAGES,
+      { role: 'user', content: text },
+    ];
+    return this.runInterpretation(
+      messages,
+      TEAM_INTENTS_JSON_SCHEMA,
+      (content) => this.toTeamResult(content, context),
+    );
+  }
+
+  /**
+   * Núcleo compartido de los dos modos: intento sin `response_format`
+   * (mejor calidad), reintento con `json_schema` strict (garantiza JSON
+   * parseable) y degradación a sin-schema si el servidor lo rechaza.
+   * `toResult` devuelve null cuando el contenido no tiene intenciones
+   * utilizables (dispara el reintento).
+   */
+  private async runInterpretation<
+    T extends { kind: string },
+  >(
+    messages: ChatMessage[],
+    jsonSchema: unknown,
+    toResult: (content: string) => T | null,
+  ): Promise<T | { kind: 'error' }> {
+    // Intento 1: sin salida estructurada (mejor calidad).
+    const first = await this.requestCompletion(messages, null);
     if (first.status !== 'ok') {
       return { kind: 'error' };
     }
-    const firstResult = this.toResult(first.content, context);
+    const firstResult = toResult(first.content);
     if (firstResult !== null) {
       return firstResult;
     }
@@ -107,22 +178,22 @@ export class AiService {
     );
 
     // Intento 2: con json_schema estricto (garantiza JSON parseable).
-    let second = await this.requestCompletion(messages, true);
+    let second = await this.requestCompletion(messages, jsonSchema);
     if (second.status === 'schema_rejected') {
       this.logger.warn(
         'LM Studio rechazó response_format.json_schema: se reintenta sin salida estructurada',
       );
-      second = await this.requestCompletion(messages, false);
+      second = await this.requestCompletion(messages, null);
     }
     if (second.status !== 'ok') {
       return { kind: 'error' };
     }
-    return this.toResult(second.content, context) ?? { kind: 'error' };
+    return toResult(second.content) ?? { kind: 'error' };
   }
 
   private async requestCompletion(
     messages: ChatMessage[],
-    withJsonSchema: boolean,
+    jsonSchema: unknown,
   ): Promise<CompletionResult> {
     const baseUrl = (this.config.get<string>('LMSTUDIO_BASE_URL') ?? '')
       .trim()
@@ -135,10 +206,10 @@ export class AiService {
       temperature: 0,
       max_tokens: MAX_TOKENS,
     };
-    if (withJsonSchema) {
+    if (jsonSchema !== null) {
       body.response_format = {
         type: 'json_schema',
-        json_schema: INTENTS_JSON_SCHEMA,
+        json_schema: jsonSchema,
       };
     } else {
       body.stop = STOP_SEQUENCES;
@@ -153,7 +224,11 @@ export class AiService {
       });
 
       if (!response.ok) {
-        if (withJsonSchema && response.status >= 400 && response.status < 500) {
+        if (
+          jsonSchema !== null &&
+          response.status >= 400 &&
+          response.status < 500
+        ) {
           return { status: 'schema_rejected' };
         }
         this.logger.error(
@@ -216,6 +291,126 @@ export class AiService {
     return { kind: 'unknown' };
   }
 
+  /** Equivalente de `toResult` para el modo de equipo. */
+  private toTeamResult(
+    content: string,
+    context: AiTeamContext,
+  ): AiTeamIntentResult | null {
+    const intents = this.collectTeamIntents(content, context);
+    if (intents === null || intents.length === 0) {
+      return null;
+    }
+    const executable = intents.filter(
+      (i) => i.operation !== 'charla' && i.operation !== 'desconocida',
+    );
+    if (executable.length > 0) {
+      return { kind: 'intents', intents: executable };
+    }
+    if (intents.some((i) => i.operation === 'charla')) {
+      return { kind: 'smalltalk' };
+    }
+    return { kind: 'unknown' };
+  }
+
+  /** Extrae y normaliza intenciones de equipo del contenido del modelo. */
+  private collectTeamIntents(
+    content: string,
+    context: AiTeamContext,
+  ): AiTeamIntent[] | null {
+    const items = this.extractIntentItems(content);
+    if (items === null) {
+      return null;
+    }
+    const intents: AiTeamIntent[] = [];
+    for (const item of items.slice(0, MAX_INTENTS)) {
+      const intent = this.normalizeTeamIntent(item, context.today);
+      if (intent !== null) {
+        intents.push(intent);
+      }
+    }
+    return intents;
+  }
+
+  /** Normaliza un elemento crudo a AiTeamIntent; null si no tiene operación. */
+  private normalizeTeamIntent(
+    item: unknown,
+    today: string,
+  ): AiTeamIntent | null {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      return null;
+    }
+    const candidate = item as Record<string, unknown>;
+    if (typeof candidate.operation !== 'string') {
+      return null;
+    }
+
+    const operation = this.normalizeTeamOperation(candidate.operation, candidate);
+    const intent: Record<string, unknown> = { operation };
+    for (const field of TEAM_OPERATION_FIELDS[operation]) {
+      const value = this.sanitizeField(field, candidate[field], today);
+      if (value !== undefined) {
+        intent[field] = value;
+      }
+    }
+    return intent as AiTeamIntent;
+  }
+
+  /**
+   * Normaliza el nombre de operación del modo de equipo. Los modelos
+   * inventan variantes del modo dueño (`extender`, `reasignar`,
+   * `crear_pendiente`, `pedir_extension`, `listar_pendientes`...): aquí se
+   * mapean a las operaciones restringidas del equipo. `listar_pendientes`
+   * sin cliente → `mis_pendientes`; con cliente → `pendientes_cliente`.
+   * El orden importa: las reglas más específicas van primero.
+   */
+  private normalizeTeamOperation(
+    raw: string,
+    candidate: Record<string, unknown>,
+  ): AiTeamOperation {
+    const op = raw.trim().toLowerCase();
+    const hasClientName =
+      typeof candidate.clientName === 'string' &&
+      candidate.clientName.trim().length > 0;
+    if ((AI_TEAM_OPERATIONS as readonly string[]).includes(op)) {
+      if (op === 'pendientes_cliente' && !hasClientName) {
+        return 'mis_pendientes';
+      }
+      return op as AiTeamOperation;
+    }
+
+    const has = (...needles: string[]) => needles.some((n) => op.includes(n));
+    if (has('reasign')) return 'solicitar_reasignacion';
+    if (
+      has(
+        'exten',
+        'prorrog',
+        'mas_tiempo',
+        'cambiar_fecha',
+        'actualizar_fecha',
+        'nueva_fecha',
+        'mover_fecha',
+      )
+    ) {
+      return 'solicitar_extension';
+    }
+    if (has('termin', 'finaliz', 'complet', 'entreg')) return 'terminar';
+    if (has('crear', 'nuevo', 'nueva', 'proponer', 'agregar', 'anadir', 'añadir')) {
+      return 'solicitar_pendiente';
+    }
+    if (has('estado', 'marcar')) return 'solicitar_cambio_estado';
+    if (has('asign', 'pasar', 'transferir', 'delegar')) {
+      return 'solicitar_reasignacion';
+    }
+    if (has('mis_', 'mios', 'propios')) return 'mis_pendientes';
+    if (has('listar', 'pendiente', 'tarea', 'consulta', 'ver')) {
+      return hasClientName ? 'pendientes_cliente' : 'mis_pendientes';
+    }
+    if (has('cliente')) return 'pendientes_cliente';
+    if (has('ayuda', 'help')) return 'ayuda';
+    if (has('charla', 'gracias', 'salud', 'hola', 'small')) return 'charla';
+    return 'desconocida';
+  }
+
   /**
    * Extrae y normaliza la lista de intenciones del contenido del modelo.
    * Acepta `{"intents":[...]}`, un objeto suelto con `operation` (se envuelve
@@ -223,21 +418,8 @@ export class AiService {
    * Devuelve null si no hay JSON con esa forma.
    */
   private collectIntents(content: string, context: AiContext): AiIntent[] | null {
-    const raw = this.parseJson(content);
-
-    let items: unknown[];
-    if (Array.isArray(raw)) {
-      items = raw;
-    } else if (typeof raw === 'object' && raw !== null) {
-      const candidate = raw as Record<string, unknown>;
-      if (Array.isArray(candidate.intents)) {
-        items = candidate.intents;
-      } else if ('operation' in candidate) {
-        items = [candidate];
-      } else {
-        return null;
-      }
-    } else {
+    const items = this.extractIntentItems(content);
+    if (items === null) {
       return null;
     }
 
@@ -252,6 +434,29 @@ export class AiService {
       }
     }
     return intents;
+  }
+
+  /**
+   * Extrae la lista cruda de intenciones del contenido del modelo (compartido
+   * por ambos modos). Acepta `{"intents":[...]}`, un objeto suelto con
+   * `operation` (se envuelve como lista de 1) o un array de objetos.
+   * Devuelve null si no hay JSON con esa forma.
+   */
+  private extractIntentItems(content: string): unknown[] | null {
+    const raw = this.parseJson(content);
+    if (Array.isArray(raw)) {
+      return raw;
+    }
+    if (typeof raw === 'object' && raw !== null) {
+      const candidate = raw as Record<string, unknown>;
+      if (Array.isArray(candidate.intents)) {
+        return candidate.intents;
+      }
+      if ('operation' in candidate) {
+        return [candidate];
+      }
+    }
+    return null;
   }
 
   /**
@@ -430,6 +635,7 @@ export class AiService {
       }
       case 'clientName':
       case 'title':
+      case 'taskRef':
       case 'reason':
         return typeof value === 'string' && value.trim().length > 0
           ? value.trim()

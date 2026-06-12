@@ -11,6 +11,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PlansModule } from './plans/plans.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RemindersModule } from './reminders/reminders.module';
+import { RequestsModule } from './requests/requests.module';
 import { TasksModule } from './tasks/tasks.module';
 import { TeamMembersModule } from './team-members/team-members.module';
 import { TelegramModule } from './telegram/telegram.module';
@@ -26,6 +27,7 @@ import { TelegramModule } from './telegram/telegram.module';
     ClientsModule,
     TeamMembersModule,
     TasksModule,
+    RequestsModule,
     NotificationsModule,
     AiModule,
     TelegramModule,

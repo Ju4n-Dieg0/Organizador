@@ -89,3 +89,91 @@ export type AiIntentResult =
   | { kind: 'unknown' }
   /** LM Studio inaccesible o JSON malformado tras el reintento. */
   | { kind: 'error' };
+
+// ---------------------------------------------------------------------------
+// Modo conversacional de EQUIPO (miembros vinculados por Telegram).
+// Prompt y set de operaciones SEPARADOS del modo dueño: el modelo de equipo
+// nunca ve operaciones que el miembro no puede pedir. Ver docs/SPEC.md.
+// ---------------------------------------------------------------------------
+
+/** Operaciones del modo de equipo. */
+export const AI_TEAM_OPERATIONS = [
+  'mis_pendientes',
+  'pendientes_cliente',
+  'terminar',
+  'solicitar_pendiente',
+  'solicitar_extension',
+  'solicitar_reasignacion',
+  'solicitar_cambio_estado',
+  'ayuda',
+  'charla',
+  'desconocida',
+] as const;
+export type AiTeamOperation = (typeof AI_TEAM_OPERATIONS)[number];
+
+/** Contexto del modo de equipo: lo arma la capa de Telegram con sus services. */
+export interface AiTeamContext {
+  /** Nombre del miembro que habla. */
+  memberName: string;
+  clients: { id: number; name: string }[];
+  members: { id: number; name: string }[];
+  /** Pendientes ABIERTOS asignados al miembro (para taskId/taskRef). */
+  myTasks: {
+    id: number;
+    title: string;
+    clientName: string;
+    status: TaskStatus;
+    dueDate: string | null;
+  }[];
+  /** Fecha de hoy en formato YYYY-MM-DD, para resolver fechas relativas. */
+  today: string;
+}
+
+/**
+ * Intención del modo de equipo. `taskId` solo si el modelo lo toma de
+ * `myTasks`; `taskRef` es el título en texto libre. La capa de Telegram
+ * SIEMPRE valida el alcance (taskId ∈ myTasks) y resuelve taskRef por fuzzy
+ * matching con confirmación: nunca confía ciegamente en el modelo.
+ */
+export type AiTeamIntent =
+  | { operation: 'mis_pendientes' }
+  | { operation: 'pendientes_cliente'; clientName?: string }
+  | { operation: 'terminar'; taskId?: number; taskRef?: string }
+  | {
+      operation: 'solicitar_pendiente';
+      clientName?: string;
+      title?: string;
+      memberNames?: string[];
+      dueDate?: string; // YYYY-MM-DD
+    }
+  | {
+      operation: 'solicitar_extension';
+      taskId?: number;
+      taskRef?: string;
+      newDueDate?: string; // YYYY-MM-DD
+      reason?: string;
+    }
+  | {
+      operation: 'solicitar_reasignacion';
+      taskId?: number;
+      taskRef?: string;
+      memberNames?: string[];
+      reason?: string;
+    }
+  | {
+      operation: 'solicitar_cambio_estado';
+      taskId?: number;
+      taskRef?: string;
+      status?: TaskStatus;
+      reason?: string;
+    }
+  | { operation: 'ayuda' }
+  | { operation: 'charla' }
+  | { operation: 'desconocida' };
+
+/** Resultado de interpretar un mensaje de un miembro del equipo. */
+export type AiTeamIntentResult =
+  | { kind: 'intents'; intents: AiTeamIntent[] }
+  | { kind: 'smalltalk' }
+  | { kind: 'unknown' }
+  | { kind: 'error' };

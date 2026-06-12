@@ -1,4 +1,7 @@
 import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+
+dayjs.extend(relativeTime);
 
 export const DATE_FORMAT = 'DD/MM/YYYY';
 export const DATETIME_FORMAT = 'DD/MM/YYYY HH:mm';
@@ -11,6 +14,12 @@ export function formatDate(iso: string | null | undefined): string {
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   return dayjs(iso).format(DATETIME_FORMAT);
+}
+
+/** Tiempo relativo en español («hace 2 horas»). El locale es se fija en main.tsx. */
+export function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return dayjs(iso).fromNow();
 }
 
 export type DueStatus = 'vencido' | 'hoy' | 'manana' | 'futuro' | 'sin-fecha';

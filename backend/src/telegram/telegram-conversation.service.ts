@@ -39,10 +39,10 @@ const MSG_ERROR =
   'Ahora mismo no puedo interpretar mensajes: el asistente de IA no responde (¿LM Studio está corriendo?). Mientras tanto puedes usar los comandos de /ayuda.';
 
 /** Vida útil de un borrador conversacional: ~10 minutos. */
-const DRAFT_TTL_MS = 10 * 60 * 1000;
+export const DRAFT_TTL_MS = 10 * 60 * 1000;
 
 /** Confirmaciones aceptadas (sobre texto normalizado, sin puntuación). */
-const AFFIRMATIONS = new Set([
+export const AFFIRMATIONS = new Set([
   'si',
   'dale',
   'ok',
@@ -64,7 +64,7 @@ const AFFIRMATIONS = new Set([
 ]);
 
 /** Cancelaciones aceptadas en CUALQUIER estado del borrador. */
-const CANCELS = new Set([
+export const CANCELS = new Set([
   'cancela',
   'cancelar',
   'olvidalo',
@@ -99,11 +99,11 @@ interface PauseRequest {
 type StepResult = { kind: 'done' } | { kind: 'pause'; pause: PauseRequest };
 
 /** Normaliza una respuesta corta: sin tildes, puntuación ni mayúsculas. */
-function normalizeReply(text: string): string {
+export function normalizeReply(text: string): string {
   return normalizeName(text.replace(/[.,;:!¡¿?"«»'…]/g, ' '));
 }
 
-function localIsoDate(date: Date): string {
+export function localIsoDate(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
@@ -114,7 +114,7 @@ function localIsoDate(date: Date): string {
  * Parse local de fechas sin LLM: YYYY-MM-DD en cualquier parte del texto,
  * o "hoy" / "mañana" / "pasado mañana" calculadas localmente.
  */
-function extractLocalDate(text: string): string | null {
+export function extractLocalDate(text: string): string | null {
   const explicit = text.match(/\d{4}-\d{2}-\d{2}/);
   if (explicit) return explicit[0];
   const norm = normalizeReply(text);

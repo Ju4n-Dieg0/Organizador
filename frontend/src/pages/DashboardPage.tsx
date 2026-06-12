@@ -18,6 +18,7 @@ import { KpiCard } from '../components/common/KpiCard';
 import { StatusTag } from '../components/common/StatusTag';
 import { DueDateCell } from '../components/tasks/DueDateCell';
 import { TaskDetailDrawer } from '../components/tasks/TaskDetailDrawer';
+import { PendingRequestsPanel } from '../components/requests/PendingRequestsPanel';
 import { useClients } from '../hooks/useClients';
 import { useTasks } from '../hooks/useTasks';
 import {
@@ -156,30 +157,37 @@ export function DashboardPage() {
         ))}
       </Row>
 
-      <GlassCard style={{ marginTop: 24 }}>
-        {/* h2 (sin salto h1→h5); el tamaño visual se conserva con fontSize. */}
-        <Typography.Title
-          level={2}
-          style={{ marginTop: 0, marginBottom: 16, letterSpacing: '-0.01em', fontSize: 16 }}
-        >
-          Próximas entregas
-        </Typography.Title>
-        <Table<TaskResponse>
-          rowKey="id"
-          size="small"
-          columns={columns}
-          dataSource={upcoming}
-          loading={tasksLoading}
-          pagination={{ pageSize: 10, hideOnSinglePage: true }}
-          locale={{ emptyText: 'No hay entregas próximas' }}
-          scroll={{ x: 720 }}
-          onRow={(task) => ({
-            style: isOverdue(task.dueDate)
-              ? { background: withAlpha(colors.error, 0.06) }
-              : undefined,
-          })}
-        />
-      </GlassCard>
+      <Row gutter={[16, 16]} style={{ marginTop: 24 }}>
+        <Col xs={24} xl={16}>
+          <GlassCard style={{ height: '100%' }}>
+            {/* h2 (sin salto h1→h5); el tamaño visual se conserva con fontSize. */}
+            <Typography.Title
+              level={2}
+              style={{ marginTop: 0, marginBottom: 16, letterSpacing: '-0.01em', fontSize: 16 }}
+            >
+              Próximas entregas
+            </Typography.Title>
+            <Table<TaskResponse>
+              rowKey="id"
+              size="small"
+              columns={columns}
+              dataSource={upcoming}
+              loading={tasksLoading}
+              pagination={{ pageSize: 10, hideOnSinglePage: true }}
+              locale={{ emptyText: 'No hay entregas próximas' }}
+              scroll={{ x: 720 }}
+              onRow={(task) => ({
+                style: isOverdue(task.dueDate)
+                  ? { background: withAlpha(colors.error, 0.06) }
+                  : undefined,
+              })}
+            />
+          </GlassCard>
+        </Col>
+        <Col xs={24} xl={8}>
+          <PendingRequestsPanel />
+        </Col>
+      </Row>
 
       <TaskDetailDrawer taskId={detailTaskId} onClose={() => setDetailTaskId(null)} />
     </PageTransition>

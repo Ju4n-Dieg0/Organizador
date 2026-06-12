@@ -1,5 +1,7 @@
-import { AiIntent } from '../ai/ai-intent.types';
+import { AiIntent, AiTeamIntent } from '../ai/ai-intent.types';
 import { ClientResponseDto } from '../clients/dto/client-response.dto';
+import type { CreateTeamRequestInput } from '../requests/requests.service';
+import { TaskResponseDto } from '../tasks/dto/task-response.dto';
 import { TeamMemberResponseDto } from '../team-members/dto/team-member-response.dto';
 
 /**
@@ -42,4 +44,47 @@ export interface ConversationDraft {
   clientCache: Record<string, ClientResponseDto>;
   memberCache: Record<string, TeamMemberResponseDto>;
   awaiting: DraftAwaiting;
+}
+
+// ---------------------------------------------------------------------------
+// Borrador del modo conversacional de EQUIPO (uno por chat de miembro).
+// Mismo patrón multi-turno con TTL que el del dueño, pero los datos que
+// faltan se completan campo a campo (sin re-llamar al LLM) y las solicitudes
+// siempre terminan en una confirmación explícita antes de enviarse.
+// ---------------------------------------------------------------------------
+
+/**
+ * Qué espera el borrador de equipo:
+ * - `task-confirm`: sugerencia fuzzy de tarea propia («¿te refieres a…?»).
+ * - `task-pick`: el siguiente mensaje es el título de la tarea (re-fuzzy).
+ * - `client-confirm` / `client-name`: igual que el dueño, para clientes.
+ * - `member-confirm` / `member-name`: igual, para personas (`query` indica
+ *   qué entrada de `memberNames` se reemplaza; vacía = agregar).
+ * - `assignee-or-skip`: solicitud de pendiente con fecha pero sin persona
+ *   («no sé» descarta la fecha y envía sin asignación propuesta).
+ * - `field`: el siguiente mensaje es el valor literal del campo indicado.
+ * - `confirm-send`: resumen mostrado; «sí» envía la solicitud, «cancela»
+ *   la descarta.
+ */
+export type TeamDraftAwaiting =
+  | { kind: 'task-confirm'; query: string; task: TaskResponseDto }
+  | { kind: 'task-pick' }
+  | { kind: 'client-confirm'; query: string; clientName: string }
+  | { kind: 'client-name' }
+  | { kind: 'member-confirm'; query: string; memberName: string }
+  | { kind: 'member-name'; query: string }
+  | { kind: 'assignee-or-skip' }
+  | { kind: 'field'; field: 'title' | 'newDueDate' | 'dueDate' | 'reason' | 'status' }
+  | { kind: 'confirm-send'; input: CreateTeamRequestInput; summary: string };
+
+/**
+ * Borrador multi-turno de un chat de miembro. La intención actual es la
+ * posición 0 de `intents`; `myTasks` es el snapshot de pendientes abiertos
+ * del miembro usado para validar alcance y resolver títulos.
+ */
+export interface TeamConversationDraft {
+  createdAt: number;
+  intents: AiTeamIntent[];
+  myTasks: TaskResponseDto[];
+  awaiting: TeamDraftAwaiting;
 }

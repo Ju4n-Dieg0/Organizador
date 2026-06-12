@@ -35,6 +35,11 @@ interface ApiErrorBody {
   error?: string;
 }
 
+/** Status HTTP de un error de la API (undefined si no es error axios con respuesta). */
+export function getApiErrorStatus(error: unknown): number | undefined {
+  return axios.isAxiosError(error) ? error.response?.status : undefined;
+}
+
 /** Extrae el mensaje en español del formato de error estándar de Nest. */
 export function getApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {

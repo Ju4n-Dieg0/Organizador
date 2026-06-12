@@ -136,5 +136,7 @@ export {
   motionTokens,
   appBackground,
   taskStatusColor,
+  requestTypeColor,
+  requestStatusColor,
   withAlpha,
 } from './tokens';

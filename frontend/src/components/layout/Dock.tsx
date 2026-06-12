@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Dropdown, Grid, Tooltip } from 'antd';
+import { Badge, Dropdown, Grid, Tooltip } from 'antd';
 import type { CSSProperties, ReactNode } from 'react';
 import {
   AppstoreOutlined,
   DashboardOutlined,
   IdcardOutlined,
+  InboxOutlined,
   LogoutOutlined,
   ScheduleOutlined,
   TeamOutlined,
@@ -13,6 +14,7 @@ import {
 } from '@ant-design/icons';
 import { ROUTES } from '../../constants/routes';
 import { useAuth } from '../../hooks/useAuth';
+import { usePendingRequests } from '../../hooks/useRequests';
 import { colors, radii, shadows } from '../../theme';
 
 interface DockItemDef {
@@ -27,6 +29,7 @@ const NAV_ITEMS: DockItemDef[] = [
   { key: ROUTES.plans, icon: <AppstoreOutlined />, label: 'Planes' },
   { key: ROUTES.team, icon: <IdcardOutlined />, label: 'Equipo' },
   { key: ROUTES.tasks, icon: <ScheduleOutlined />, label: 'Pendientes' },
+  { key: ROUTES.requests, icon: <InboxOutlined />, label: 'Solicitudes' },
 ];
 
 const dockShell: CSSProperties = {
@@ -49,6 +52,8 @@ interface DockButtonProps {
   active?: boolean;
   danger?: boolean;
   tooltipPlacement: 'right' | 'top';
+  /** Contador en badge sobre el icono (oculto si 0/undefined). */
+  badgeCount?: number;
   onClick?: () => void;
 }
 
@@ -58,13 +63,17 @@ function DockButton({
   active = false,
   danger = false,
   tooltipPlacement,
+  badgeCount,
   onClick,
 }: DockButtonProps) {
+  const ariaLabel = badgeCount
+    ? `${label} (${badgeCount} pendiente${badgeCount === 1 ? '' : 's'})`
+    : label;
   return (
     <Tooltip title={label} placement={tooltipPlacement}>
       <button
         type="button"
-        aria-label={label}
+        aria-label={ariaLabel}
         aria-current={active ? 'page' : undefined}
         onClick={onClick}
         className={`dock-item${active ? ' dock-item-active' : ''}`}
@@ -82,7 +91,21 @@ function DockButton({
           boxShadow: active ? shadows.dockGlow : 'none',
         }}
       >
-        {icon}
+        {badgeCount ? (
+          // title="" evita anunciar el conteo dos veces (ya va en el aria-label).
+          // warning (no error): "pendiente de acción", consistente con la feature.
+          <Badge
+            count={badgeCount}
+            size="small"
+            offset={[4, -4]}
+            title=""
+            style={{ background: colors.warning, color: colors.onAccent }}
+          >
+            <span style={{ color: 'inherit', fontSize: 'inherit' }}>{icon}</span>
+          </Badge>
+        ) : (
+          icon
+        )}
       </button>
     </Tooltip>
   );
@@ -101,6 +124,11 @@ export function Dock() {
   const screens = Grid.useBreakpoint();
   const isMobile = screens.md === false;
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  // Badge de solicitudes pendientes (polling 30s; pueden resolverse por Telegram).
+  const { data: pendingRequests } = usePendingRequests();
+  const pendingCount = pendingRequests?.length ?? 0;
+  const badgeFor = (key: string) =>
+    key === ROUTES.requests && pendingCount > 0 ? pendingCount : undefined;
 
   const activeKey = useMemo(() => {
     const { pathname } = location;
@@ -113,10 +141,12 @@ export function Dock() {
 
   if (isMobile) {
     // Barra inferior: 4 secciones principales + menú de usuario (máx 5 items).
-    const mobileItems = NAV_ITEMS.filter((item) => item.key !== ROUTES.plans);
+    // Planes y Equipo viven en el menú; Solicitudes queda en la barra (badge).
+    const menuRoutes: string[] = [ROUTES.plans, ROUTES.team];
+    const mobileItems = NAV_ITEMS.filter((item) => !menuRoutes.includes(item.key));
     // La ruta activa vive dentro del menú: se indica con un dot accent sobre
     // el trigger (no marcando el botón del menú como item activo completo).
-    const activeInsideMenu = activeKey === ROUTES.plans;
+    const activeInsideMenu = menuRoutes.includes(activeKey);
     return (
       <nav
         aria-label="Navegación principal"
@@ -135,6 +165,7 @@ export function Dock() {
             icon={item.icon}
             label={item.label}
             active={activeKey === item.key}
+            badgeCount={badgeFor(item.key)}
             tooltipPlacement="top"
             onClick={() => navigate(item.key)}
           />
@@ -144,12 +175,20 @@ export function Dock() {
           placement="topRight"
           onOpenChange={setUserMenuOpen}
           menu={{
+            selectable: true,
+            selectedKeys: [activeKey],
             items: [
               {
                 key: ROUTES.plans,
                 icon: <AppstoreOutlined />,
                 label: 'Planes',
                 onClick: () => navigate(ROUTES.plans),
+              },
+              {
+                key: ROUTES.team,
+                icon: <IdcardOutlined />,
+                label: 'Equipo',
+                onClick: () => navigate(ROUTES.team),
               },
               { type: 'divider' },
               {
@@ -164,7 +203,7 @@ export function Dock() {
         >
           <button
             type="button"
-            aria-label={`Menú de usuario: ${user?.name ?? 'Usuario'}`}
+            aria-label={`Menú de usuario: ${user?.name ?? 'Usuario'}${activeInsideMenu ? ' (sección actual dentro del menú)' : ''}`}
             aria-haspopup="menu"
             aria-expanded={userMenuOpen}
             className="dock-item"
@@ -223,6 +262,7 @@ export function Dock() {
           icon={item.icon}
           label={item.label}
           active={activeKey === item.key}
+          badgeCount={badgeFor(item.key)}
           tooltipPlacement="right"
           onClick={() => navigate(item.key)}
         />
