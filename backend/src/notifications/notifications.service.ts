@@ -205,15 +205,26 @@ export class NotificationsService {
     }
   }
 
+  /**
+   * Fan-out a los asignados con chat vinculado.
+   * Deduplicación del dueño-miembro: NUNCA se envía al miembro cuyo
+   * `telegramChatId` coincide con `TELEGRAM_OWNER_CHAT_ID`, porque el dueño
+   * ya se entera por su notificación de dueño (`sendToOwner`) o es el autor
+   * de la acción (p. ej. `notifyTaskCommented` con autor DUENO cuando su
+   * miembro está asignado). Los recordatorios diarios (`notifyReminders`)
+   * no pasan por aquí y sí le llegan a su chat.
+   */
   private async notifyAssignees(
     task: TaskResponseDto,
     html: string,
     exclude?: { memberId?: number; memberName?: string },
   ): Promise<void> {
     if (task.assignees.length === 0) return;
+    const ownerChatId = this.config.get<string>('TELEGRAM_OWNER_CHAT_ID');
     const members = await this.teamMembersService.findAllInternal();
     for (const member of members) {
       if (!member.telegramChatId) continue;
+      if (ownerChatId && member.telegramChatId === ownerChatId) continue;
       if (!task.assignees.some((a) => a.memberId === member.id)) continue;
       if (exclude?.memberId !== undefined && member.id === exclude.memberId)
         continue;

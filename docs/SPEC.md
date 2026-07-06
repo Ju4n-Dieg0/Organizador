@@ -9,8 +9,12 @@ El schema autoritativo está en `backend/prisma/schema.prisma`.
 - **Plan**: `name` (único), `description?`. CRUD completo; DELETE devuelve 409 si tiene clientes.
 - **Client**: `name`, `active` (default true), `planId?`, N `ClientDriveLink {url, label?}`.
   Nunca se borra: `deactivate`/`activate`.
-- **TeamMember**: `name`, `telegramChatId?` (único, interno: NUNCA se expone al frontend), `active`.
-  Solo recibe alertas por Telegram. La vinculación se hace por deep link de `/start` (ver § Telegram).
+- **TeamMember**: `name`, `telegramChatId?` (único, interno: NUNCA se expone al frontend), `active`,
+  `isOwner` (default false). Solo recibe alertas por Telegram. La vinculación se hace por deep link
+  de `/start` (ver § Telegram).
+  - `isOwner`: marca qué miembro del equipo ES el dueño (para que el modo conversacional resuelva
+    la primera persona y para deduplicar notificaciones). Solo puede haber UNO en `true`: al marcar
+    un miembro, el service desmarca al anterior **en la misma transacción**. Desmarcar es libre.
 - **TelegramLinkToken**: token de vinculación de un solo uso por miembro (`memberId` único:
   regenerar invalida el anterior). `token` (único, `crypto.randomBytes(24)` en base64url),
   `expiresAt` (48h), `createdAt`. Se borra al usarse, al regenerar o al desvincular.
@@ -80,6 +84,7 @@ PENDIENTE --assign--> ASIGNADO --complete--> TERMINADO
 | GET | `/api/team-members/:id` | — | TeamMemberResponse |
 | PATCH | `/api/team-members/:id` | `{name?}` | TeamMemberResponse |
 | PATCH | `/api/team-members/:id/deactivate` / `activate` | — | TeamMemberResponse |
+| PATCH | `/api/team-members/:id/owner` | `{isOwner: boolean}` | TeamMemberResponse — `true` marca este miembro como el dueño y desmarca al anterior (transacción); `false` lo desmarca. |
 | POST | `/api/team-members/:id/telegram-link` | — | `TelegramLinkResponse {link: string, expiresAt: string}` — genera (o regenera, invalidando el anterior) el token y arma `https://t.me/<bot_username>?start=<token>`. 503 si el bot está desactivado (sin `TELEGRAM_BOT_TOKEN`). |
 | DELETE | `/api/team-members/:id/telegram-link` | — | 204 — desvincula: borra `telegramChatId` y el token pendiente. |
 
@@ -177,6 +182,7 @@ interface ClientResponse {
 }
 interface TeamMemberResponse {
   id: number; name: string; active: boolean; activeTaskCount: number;
+  isOwner: boolean;                     // este miembro es el dueño (máx. uno en true)
   telegramLinked: boolean;              // tiene telegramChatId guardado (el chatId crudo NUNCA se expone)
   telegramLinkPending: boolean;         // hay token vigente sin usar
   telegramLinkExpiresAt: string | null; // expiración del token vigente (solo si pending)
@@ -316,6 +322,12 @@ restringido al dueño.
 
 Notificaciones salientes (vía `NotificationsService`):
 - crear → dueño; asignar/reasignar/extender/terminar → dueño + asignados con chatId.
+- **Deduplicación del dueño-miembro**: `notifyAssignees` (el fan-out a asignados) NUNCA envía al
+  chat cuyo `telegramChatId` coincide con `TELEGRAM_OWNER_CHAT_ID`: el dueño ya se entera por su
+  notificación de dueño (`sendToOwner`) o es el autor de la acción (p. ej. comentario con
+  `authorType = DUENO` cuando su miembro está asignado). Esto cubre asignar/reasignar/extender/
+  terminar/comentar. Los **recordatorios diarios** NO usan `notifyAssignees` y SÍ le llegan
+  normal a su chat como a cualquier asignado.
 - Recordatorios: cron `REMINDER_CRON` (default `0 9 * * *`): tareas ASIGNADO/EXTENDIDO con
   `dueDate` vencida, de hoy o de mañana → resumen al dueño + alerta a cada asignado.
 
@@ -338,7 +350,19 @@ que no haya pasado la validación estructurada.
 interface AiContext {
   clients: { id: number; name: string }[];   // activos, para normalizar nombres
   members: { id: number; name: string }[];   // activos
+  openTasks: { id: number; title: string; clientName: string;
+               status: TaskStatus; dueDate: string | null }[];
+                                              // pendientes ABIERTOS (todos los clientes): el modelo
+                                              // decide con esta lista entre `asignar` (trabajo
+                                              // EXISTENTE) y `crear_pendiente` (trabajo nuevo) y
+                                              // produce taskId/taskRef. Mismo criterio que `myTasks`
+                                              // en el modo de equipo.
   today: string;                              // YYYY-MM-DD (resolver fechas relativas)
+  ownerMemberName?: string;                   // nombre del miembro con isOwner (si existe y está
+                                              // activo): la capa telegram lo llena en buildContext.
+                                              // El prompt instruye que la primera persona del dueño
+                                              // («yo», «a mí», «me lo asigno», «mis pendientes»,
+                                              // «mío») resuelve a este nombre en memberNames/memberName.
 }
 
 // Campos no identificadores son opcionales: el LLM puede omitirlos y el bot pregunta lo que falte.
@@ -346,18 +370,30 @@ interface AiContext {
 type AiIntent =
   | { operation: 'crear_pendiente'; clientName?: string; title?: string; links?: string[];
       memberNames?: string[]; dueDate?: string }  // si vienen, tras crear se ejecuta la asignación
-  | { operation: 'asignar'; taskId?: number; memberNames?: string[]; dueDate?: string }      // YYYY-MM-DD
-  | { operation: 'reasignar'; taskId?: number; memberNames?: string[]; reason?: string }
-  | { operation: 'extender'; taskId?: number; newDueDate?: string; reason?: string }
-  | { operation: 'terminar'; taskId?: number }
-  | { operation: 'cambiar_estado'; taskId?: number; status?: TaskStatus; reason?: string }
+  // Las operaciones sobre un pendiente EXISTENTE aceptan taskId (número explícito
+  // o id tomado de openTasks) o taskRef (título en texto libre, p. ej. «asígnale
+  // el pendiente de hotmart a Andrea»). La capa telegram resuelve taskRef por
+  // fuzzy matching sobre los pendientes abiertos —sin restricción de alcance: son
+  // todos— con confirmación «¿te refieres a…?» si es solo parecido y lista de
+  // opciones si es ambiguo; con fallback por nombre de cliente («el de la
+  // notaría») degradado a confirmación. NUNCA se pide el ID como única vía (el ID
+  // sigue funcionando si el dueño lo da). Regla del prompt: estas operaciones solo
+  // aplican a pendientes de openTasks; si el mensaje describe trabajo NUEVO
+  // («asígnale X a Andrea» donde X no existe) es crear_pendiente con memberNames.
+  | { operation: 'asignar'; taskId?: number; taskRef?: string; memberNames?: string[]; dueDate?: string } // YYYY-MM-DD
+  | { operation: 'reasignar'; taskId?: number; taskRef?: string; memberNames?: string[]; reason?: string }
+  | { operation: 'extender'; taskId?: number; taskRef?: string; newDueDate?: string; reason?: string }
+  | { operation: 'terminar'; taskId?: number; taskRef?: string }
+  | { operation: 'cambiar_estado'; taskId?: number; taskRef?: string; status?: TaskStatus; reason?: string }
   | { operation: 'comentar'; taskId?: number; taskRef?: string; message?: string }
-      // comentario del dueño sobre un pendiente; taskRef = título en texto libre
-      // («dile a los del reel de ToGrow que el cliente cambió el logo»). La capa
-      // telegram resuelve taskRef por fuzzy matching con confirmación (misma
-      // resolución de pendientes por título que ya usan las demás operaciones)
-      // y si falta message lo pregunta (borrador multi-turno).
-  | { operation: 'listar_pendientes'; clientName?: string }
+      // comentario del dueño sobre un pendiente; si falta message lo pregunta
+      // (borrador multi-turno) y lo toma LITERAL.
+  | { operation: 'listar_pendientes'; clientName?: string; memberName?: string }
+      // memberName filtra por persona asignada («¿qué pendientes tiene Andrea?»,
+      // «¿qué pendientes tengo yo?» → ownerMemberName). Combinable con clientName
+      // («pendientes de Andrea en ToGrow» → ambos filtros, AND). El handler del
+      // dueño resuelve el nombre con el resolver fuzzy (confirmación «¿te refieres
+      // a…?») y llama TasksService.findAll({ clientId?, memberId? }).
   | { operation: 'listar_clientes' }
   | { operation: 'listar_personas' }
   | { operation: 'ayuda' }
@@ -424,20 +460,30 @@ Misma estrategia de implementación que el modo dueño (intento sin `response_fo
 con `json_schema` strict, validación tolerante con whitelist de campos y normalización de
 operaciones inventadas por sinónimos, p. ej. `pedir_extension`→`solicitar_extension`).
 
-Implementación (`fetch` nativo, sin dependencias nuevas, calibrada contra phi-3-mini):
+Implementación (`fetch` nativo, sin dependencias nuevas, calibrada contra LM Studio —
+validada con meta-llama-3.1-8b-instruct; compacta para modelos chicos como phi-3-mini):
 
 - **Intento 1 sin `response_format`**: prompt de sistema compacto + few-shot como pares
-  user/assistant (≤6 ejemplos: más ejemplos descarrilan a phi-3-mini), `temperature: 0`,
-  `max_tokens` acotado y `stop: ["\n\n"]` para cortar divagues. Parser tolerante (fences,
-  primer JSON balanceado).
+  user/assistant (lista corta y validada: demasiados ejemplos descarrilan a los modelos
+  pequeños), `temperature: 0`, `max_tokens` acotado (1200: un mensaje enumerado del dueño puede
+  producir 6 intenciones y con 600 se truncaba el JSON) y `stop: ["\n\n"]` para cortar
+  divagues. Parser tolerante (fences, primer JSON balanceado). Máximo 8 intenciones por mensaje.
 - **Reintento con `response_format: json_schema` (strict)**: schema `{ intents: [...] }` con
   enum de operaciones; garantiza JSON parseable (la decodificación restringida degrada la
-  calidad de phi-3-mini, por eso es el fallback y no el primer intento).
+  calidad de los modelos chicos, por eso es el fallback y no el primer intento).
 - **Validación tolerante**: whitelist de campos por operación (campos inventados se descartan),
   tipos campo a campo, fechas `YYYY-MM-DD`, y **normalización de operaciones inventadas** por
   sinónimos (p. ej. `gracias`→`charla`, `terminar_pendiente`→`terminar`, `obtener_clientes`→
   `listar_clientes`, `marcar_como`+`status`→`cambiar_estado`); estados en inglés (`EXTENDED`)
   se mapean al enum. Operación no mapeable → `desconocida`.
+- **Red de seguridad del taskId (modo dueño)**: un `taskId` del modelo solo se conserva si el
+  número aparece literal en el mensaje del dueño o si es un id real de `openTasks`; cualquier
+  otro id se descarta (queda el `taskRef` o el bot pregunta) — nunca se actúa sobre un
+  pendiente inventado.
+- **Corrección determinista de días de semana (modo dueño)**: los modelos chicos fallan la
+  aritmética de calendario («al lunes» → un domingo). Si el mensaje tiene UNA sola intención,
+  menciona exactamente un día de la semana y no trae fecha explícita `YYYY-MM-DD`, la fecha
+  (`dueDate`/`newDueDate`) se fija a la próxima ocurrencia de ese día (siempre a futuro).
 
 ### Reglas del handler de texto libre (Telegram)
 
@@ -445,9 +491,11 @@ Implementación (`fetch` nativo, sin dependencias nuevas, calibrada contra phi-3
   miembro usa `interpretTeam` (capacidades restringidas; el handler de equipo se registra ANTES
   del middleware de solo-dueño y hace `next()` si el chat no es de un miembro). Cualquier otro
   chat sigue rechazado. Los textos que empiezan con `/` no pasan por la IA.
-- **Nunca se piden IDs de cliente ni de persona**: todo se resuelve por nombre vía
-  `TelegramResolverService` con fuzzy matching (normaliza acentos/mayúsculas, substring,
-  distancia de edición). Contrato del resolver:
+- **Nunca se piden IDs como única vía**: clientes y personas se resuelven por nombre, y los
+  pendientes también por título (`taskRef`), vía `TelegramResolverService` con fuzzy matching
+  (normaliza acentos/mayúsculas, substring, distancia de edición y prefijo común casi total
+  para variantes morfológicas «Jabones Artesanales»→«Jabones Artesano», siempre como
+  `suggestion` con confirmación). Contrato del resolver:
 
 ```ts
 type NameResolution<T> =
@@ -457,6 +505,15 @@ type NameResolution<T> =
   | { kind: 'none' };                   // sin candidatos
 ```
 
+- **Primera persona del dueño**: la capa telegram resuelve los pronombres de primera persona de
+  forma determinista ANTES del fuzzy matching: si un `memberName`/`memberNames[i]` normalizado es
+  un pronombre («yo», «mi», «mí», «me», «a mi», «conmigo», «mío», «mía»), se sustituye por el
+  miembro con `isOwner` (si está activo). Si NO hay miembro marcado, el bot responde para esa
+  intención «Aún no sé cuál miembro del equipo eres tú: márcalo en la sección Equipo» SIN romper
+  el resto del mensaje (las demás intenciones se procesan normal). El prompt además recibe
+  `ownerMemberName` para que el modelo emita directamente el nombre real cuando exista; el manejo
+  de pronombres en la capa telegram es la red de seguridad cuando el modelo devuelve el pronombre
+  literal o no hay miembro marcado.
 - **Borradores multi-turno**: las intenciones incompletas (faltan campos) o en espera de
   confirmación de nombre se guardan como borrador por chat (con TTL). El siguiente mensaje
   completa el dato, confirma («sí», «dale», «ok» ejecuta la sugerencia) o descarta

@@ -101,15 +101,16 @@ Además de los comandos slash, el bot entiende **lenguaje natural** desde el cha
 arriba): escribe lo que necesitas y un LLM local vía [LM Studio](https://lmstudio.ai) lo transforma
 en una o **varias** intenciones estructuradas que se ejecutan con la misma lógica de negocio que los
 comandos (historial `TaskEvent`, razones obligatorias para reasignar/extender, validación de
-transiciones). Clientes y personas se indican **siempre por nombre** (el bot nunca pide sus IDs):
-si el nombre no coincide exactamente, busca parecidos (acentos, mayúsculas, errores de tipeo) y
-pregunta «¿Te refieres a "ToGrow"?» — un «sí» confirma y ejecuta.
+transiciones). Clientes, personas y **pendientes** se indican **por nombre o título** (el bot
+nunca pide IDs como única vía, aunque el número sigue funcionando): si no coincide exactamente,
+busca parecidos (acentos, mayúsculas, errores de tipeo, variantes) y pregunta
+«¿Te refieres a "ToGrow"?» — un «sí» confirma y ejecuta.
 
 ### Configurar LM Studio
 
 1. Instala LM Studio y descarga un modelo con buen soporte de instrucciones en español.
-   El prompt está calibrado y probado contra `phi-3-mini-4k-instruct`; un modelo mayor
-   (Llama 3.1 8B Instruct o Qwen 2.5 7B Instruct) mejora la extracción en frases complejas.
+   El prompt está calibrado y probado contra `meta-llama-3.1-8b-instruct` (también funciona
+   con modelos chicos tipo `phi-3-mini-4k-instruct`, con menor calidad en frases complejas).
 2. Arranca el servidor local: pestaña **Developer → Start Server** (por defecto `http://localhost:1234`).
 3. En `backend/.env`:
 
@@ -128,13 +129,31 @@ disponible y sugiere `/ayuda`.
 |---------------------------|---------------------|
 | "crea un pendiente para Acme: subir el reel del viernes" | `/pendiente Acme \| Subir el reel del viernes` |
 | "asigna el 12 a Ana y Luis para el 20 de junio" | `/asignar 12 \| Ana, Luis \| 2026-06-20` |
+| "asígnale el pendiente del reel a Ana para el viernes" | `/asignar 12 \| Ana \| 2026-06-19` (resuelve el título) |
 | "reasigna el 12 a Marta porque Ana está de vacaciones" | `/reasignar 12 \| Marta \| Ana está de vacaciones` |
-| "extiende el 12 al 25 de junio porque el cliente pidió cambios" | `/extender 12 \| 2026-06-25 \| Cliente pidió cambios` |
-| "termina el 12" / "el 12 ya quedó" | `/terminar 12` |
+| "extiende el del reel al lunes porque faltan las fotos" | `/extender 12 \| 2026-06-15 \| Faltan las fotos` |
+| "termina el 12" / "el del reel ya quedó" | `/terminar 12` |
 | "dile a los del reel de ToGrow que el cliente cambió el logo" | `/comentar 12 \| El cliente cambió el logo` |
 | "¿qué pendientes tiene Acme?" | `/pendientes Acme` |
+| "¿qué pendientes tiene Andrea?" | `/pendientes Andrea` |
 | "muéstrame los clientes" | `/clientes` |
 | "¿quiénes están en el equipo?" | `/personas` |
+
+### Hablar en primera persona (el dueño como miembro del equipo)
+
+Si el dueño también ejecuta pendientes, puede crearse como persona del equipo y marcarse en la
+sección **Equipo** de la web con la acción **«Este soy yo»** (aparece la etiqueta «Tú» junto a su
+nombre; solo puede haber un miembro marcado). Con eso, el bot entiende la primera persona:
+
+- «crea un pendiente para ToGrow: revisar campañas y **asígnamelo a mí**»
+- «**ponme a mí** también en el pendiente del reel»
+- «¿qué pendientes **tengo yo**?» / «muéstrame **mis** pendientes»
+
+Todo resuelve a su miembro marcado, con la misma lógica de negocio (eventos, razones). Si usa
+primera persona sin haberse marcado, el bot se lo dice: «Aún no sé cuál miembro del equipo eres
+tú: márcalo en la sección Equipo» (el resto de la frase se procesa normal). Además, cuando su
+miembro está asignado a un pendiente, no recibe por duplicado las alertas de acciones que él
+mismo origina (los recordatorios diarios sí le llegan normal).
 
 ### Frases con varias intenciones, asignación al crear y confirmación de nombres
 
@@ -149,6 +168,14 @@ Una sola frase puede crear **varios pendientes** y dejar lista la asignación:
 > **Tú:** mañana
 >
 > **Bot:** 📌 Listo, ambos asignados a Andrea para mañana. (eventos `CREACION` + `ASIGNACION`)
+
+También entiende listas enumeradas con un cierre que aplica a todos los puntos:
+
+> **Tú:** Necesito asignarle varios pendientes a Juandi. Primero validar hotmart para
+> Jabones Artesano. Segundo redactar la tarea para Notaria. Todos son para Juandi.
+>
+> **Bot:** crea un pendiente por punto, cada uno con su cliente, todos asignados a Juandi
+> (y pregunta una sola vez la fecha de entrega).
 
 Si un nombre no coincide exactamente, el bot propone el más parecido:
 

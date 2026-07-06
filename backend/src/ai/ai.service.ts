@@ -31,22 +31,49 @@ import {
  * Configurable con LMSTUDIO_TIMEOUT_MS.
  */
 const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
-const MAX_TOKENS = 600;
-/** Corta los divagues de phi-3: los shots son JSON de una sola línea. */
+/**
+ * Techo de salida: una intención `crear_pendiente` con título largo ronda los
+ * 50-70 tokens; un mensaje enumerado del dueño puede producir 6 intenciones
+ * (~500 tokens) y con 600 se truncaba el JSON (verificado empíricamente
+ * contra meta-llama-3.1-8b-instruct).
+ */
+const MAX_TOKENS = 1200;
+/** Corta los divagues de modelos chicos: los shots son JSON de una línea. */
 const STOP_SEQUENCES = ['\n\n'];
-const MAX_INTENTS = 5;
+const MAX_INTENTS = 8;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Operaciones del dueño que refieren a un pendiente EXISTENTE. */
+const TASK_SCOPED_OPERATIONS: ReadonlySet<AiOperation> = new Set<AiOperation>([
+  'asignar',
+  'reasignar',
+  'extender',
+  'terminar',
+  'cambiar_estado',
+  'comentar',
+]);
+
+/** Días de la semana (es, normalizados sin tildes) → índice Date.getDay(). */
+const WEEKDAY_INDEX: Record<string, number> = {
+  domingo: 0,
+  lunes: 1,
+  martes: 2,
+  miercoles: 3,
+  jueves: 4,
+  viernes: 5,
+  sabado: 6,
+};
 
 /** Campos permitidos por operación; todo lo demás se descarta. */
 const OPERATION_FIELDS: Record<AiOperation, string[]> = {
   crear_pendiente: ['clientName', 'title', 'links', 'memberNames', 'dueDate'],
-  asignar: ['taskId', 'memberNames', 'dueDate'],
-  reasignar: ['taskId', 'memberNames', 'reason'],
-  extender: ['taskId', 'newDueDate', 'reason'],
-  terminar: ['taskId'],
-  cambiar_estado: ['taskId', 'status', 'reason'],
+  asignar: ['taskId', 'taskRef', 'memberNames', 'dueDate'],
+  reasignar: ['taskId', 'taskRef', 'memberNames', 'reason'],
+  extender: ['taskId', 'taskRef', 'newDueDate', 'reason'],
+  terminar: ['taskId', 'taskRef'],
+  cambiar_estado: ['taskId', 'taskRef', 'status', 'reason'],
   comentar: ['taskId', 'taskRef', 'message'],
-  listar_pendientes: ['clientName'],
+  listar_pendientes: ['clientName', 'memberName'],
   listar_clientes: [],
   listar_personas: [],
   ayuda: [],
@@ -130,7 +157,7 @@ export class AiService {
       { role: 'user', content: text },
     ];
     return this.runInterpretation(messages, INTENTS_JSON_SCHEMA, (content) =>
-      this.toResult(content, context),
+      this.toResult(content, context, text),
     );
   }
 
@@ -286,8 +313,12 @@ export class AiService {
    * Con ≥1 intención: filtra charla/desconocida si hay otras ejecutables;
    * todas charla → smalltalk; todas desconocida → unknown.
    */
-  private toResult(content: string, context: AiContext): AiIntentResult | null {
-    const intents = this.collectIntents(content, context);
+  private toResult(
+    content: string,
+    context: AiContext,
+    userText: string,
+  ): AiIntentResult | null {
+    const intents = this.collectIntents(content, context, userText);
     if (intents === null || intents.length === 0) {
       return null;
     }
@@ -433,7 +464,11 @@ export class AiService {
    * como lista de 1) o un array de objetos. Máximo MAX_INTENTS intenciones.
    * Devuelve null si no hay JSON con esa forma.
    */
-  private collectIntents(content: string, context: AiContext): AiIntent[] | null {
+  private collectIntents(
+    content: string,
+    context: AiContext,
+    userText: string,
+  ): AiIntent[] | null {
     const items = this.extractIntentItems(content);
     if (items === null) {
       return null;
@@ -446,10 +481,77 @@ export class AiService {
         if (intent.operation === 'crear_pendiente') {
           this.resolveClientFromTitle(intent, context);
         }
+        this.verifyTaskId(intent, context, userText);
         intents.push(intent);
       }
     }
+    if (intents.length === 1) {
+      this.fixWeekdayDate(intents[0], context.today, userText);
+    }
     return intents;
+  }
+
+  /**
+   * Red de seguridad determinista del taskId del dueño: el modelo solo puede
+   * afirmarlo si el número aparece en el mensaje (explícito, p. ej. "el 12")
+   * o si es un id real de la lista de pendientes ABIERTOS del contexto (el
+   * modelo lo resolvió de esa lista, igual que el modo de equipo con
+   * `myTasks`). Cualquier otro id se descarta: queda el taskRef o el bot
+   * pregunta, pero nunca se actúa sobre un pendiente inventado.
+   */
+  private verifyTaskId(
+    intent: AiIntent,
+    context: AiContext,
+    userText: string,
+  ): void {
+    if (!TASK_SCOPED_OPERATIONS.has(intent.operation)) return;
+    const scoped = intent as { taskId?: number };
+    const id = scoped.taskId;
+    if (id === undefined) return;
+    if (context.openTasks.some((t) => t.id === id)) return;
+    if (new RegExp(`(^|\\D)${id}(\\D|$)`).test(userText)) return;
+    scoped.taskId = undefined;
+  }
+
+  /**
+   * Corrección determinista de fechas relativas por día de semana: los
+   * modelos chicos fallan la aritmética de calendario («al lunes» → un
+   * domingo). Solo actúa cuando hay UNA intención, el mensaje menciona
+   * EXACTAMENTE un día de la semana y no trae fecha explícita YYYY-MM-DD:
+   * entonces la fecha de la intención se fija a la próxima ocurrencia de ese
+   * día (siempre a futuro, mismas semánticas que el parser local del bot).
+   */
+  private fixWeekdayDate(
+    intent: AiIntent,
+    today: string,
+    userText: string,
+  ): void {
+    const usesDueDate =
+      intent.operation === 'crear_pendiente' || intent.operation === 'asignar';
+    const usesNewDueDate = intent.operation === 'extender';
+    if (!usesDueDate && !usesNewDueDate) return;
+    if (/\d{4}-\d{2}-\d{2}/.test(userText)) return;
+
+    const norm = this.normalizeText(userText);
+    const mentioned = Object.keys(WEEKDAY_INDEX).filter((w) =>
+      new RegExp(`\\b${w}\\b`).test(norm),
+    );
+    if (mentioned.length !== 1) return;
+    const target = WEEKDAY_INDEX[mentioned[0]];
+
+    const base = new Date(`${today}T00:00:00`);
+    if (Number.isNaN(base.getTime())) return;
+    const scoped = intent as { dueDate?: string; newDueDate?: string };
+    const current = usesDueDate ? scoped.dueDate : scoped.newDueDate;
+    if (current !== undefined) {
+      const currentDay = new Date(`${current}T00:00:00`).getDay();
+      if (currentDay === target) return; // el modelo acertó: no tocar
+    }
+    const diff = (target - base.getDay() + 7) % 7 || 7; // siempre a futuro
+    base.setDate(base.getDate() + diff);
+    const fixed = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
+    if (usesDueDate) scoped.dueDate = fixed;
+    else scoped.newDueDate = fixed;
   }
 
   /**
@@ -653,6 +755,7 @@ export class AiService {
         return STATUS_SYNONYMS[upper];
       }
       case 'clientName':
+      case 'memberName':
       case 'title':
       case 'taskRef':
       case 'reason':

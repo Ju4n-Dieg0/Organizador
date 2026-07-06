@@ -92,16 +92,29 @@ export class TelegramCommandsService {
   private async pendientes(ctx: Context): Promise<void> {
     const [filter] = this.args(ctx);
     let clientId: number | undefined;
+    let memberId: number | undefined;
     let title = 'Pendientes abiertos';
     if (filter) {
-      const client = await this.resolver.resolveClient(ctx, filter);
-      if (!client) return; // ya respondió con ambigüedad/no encontrado
-      clientId = client.id;
-      title = `Pendientes abiertos de ${escapeHtml(client.name)}`;
+      // Si el filtro no coincide con NINGÚN cliente pero sí (de forma única)
+      // con una persona del equipo, se filtra por persona asignada.
+      const clientRes = await this.resolver.findClient(filter);
+      if (clientRes.kind === 'none') {
+        const memberRes = await this.resolver.findMember(filter);
+        if (memberRes.kind === 'match') {
+          memberId = memberRes.entity.id;
+          title = `Pendientes abiertos de ${escapeHtml(memberRes.entity.name)}`;
+        }
+      }
+      if (memberId === undefined) {
+        const client = await this.resolver.resolveClient(ctx, filter);
+        if (!client) return; // ya respondió con ambigüedad/no encontrado
+        clientId = client.id;
+        title = `Pendientes abiertos de ${escapeHtml(client.name)}`;
+      }
     }
-    const tasks = (await this.tasksService.findAll({ clientId })).filter(
-      (t) => t.status !== 'TERMINADO',
-    );
+    const tasks = (
+      await this.tasksService.findAll({ clientId, memberId })
+    ).filter((t) => t.status !== 'TERMINADO');
     await replyHtml(ctx, formatOpenTasks(title, tasks));
   }
 

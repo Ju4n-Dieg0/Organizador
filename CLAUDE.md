@@ -101,6 +101,11 @@ Para decisiones de UI/UX usa la skill `/ui-ux-pro-max`.
   token de un solo uso, 48 h; `DELETE` desvincula). El handler de `/start <token>` es la única
   excepción al middleware de solo-dueño del bot; si el chat ya estaba vinculado a otro miembro,
   se re-vincula al nuevo avisando.
+  `isOwner` marca cuál miembro ES el dueño (máximo uno; marcar desmarca al anterior vía
+  `PATCH /api/team-members/:id/owner`): el modo conversacional resuelve la primera persona del
+  dueño («asígnamelo a mí», «mis pendientes») a ese miembro, y el fan-out de alertas a asignados
+  nunca envía al chat del dueño (ya se entera por su notificación de dueño; los recordatorios
+  diarios sí le llegan).
 - **Pendiente (Task)**: pertenece a un cliente; título, N links de documentos, personas asignadas (N:M), fecha de entrega.
   - Estados: `PENDIENTE → ASIGNADO → TERMINADO`, y `EXTENDIDO` (requiere razón + nueva fecha).
   - Reasignar requiere razón. Todo cambio queda en `TaskEvent` (historial auditable).

@@ -49,6 +49,7 @@ model TeamMember {
   name           String
   telegramChatId String?            @unique
   active         Boolean            @default(true)
+  isOwner        Boolean            @default(false)
   assignments    TaskAssignee[]
   linkToken      TelegramLinkToken?
   requests       TeamRequest[]

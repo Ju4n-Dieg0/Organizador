@@ -22,8 +22,29 @@ export type AiOperation = (typeof AI_OPERATIONS)[number];
 export interface AiContext {
   clients: { id: number; name: string }[];
   members: { id: number; name: string }[];
+  /**
+   * Pendientes ABIERTOS (todos los clientes, estado ≠ TERMINADO): el modelo
+   * los usa para decidir entre `asignar` (trabajo EXISTENTE de la lista) y
+   * `crear_pendiente` (trabajo nuevo) y para producir taskId/taskRef. La capa
+   * telegram NUNCA confía en un taskId del modelo sin validarlo contra los
+   * services (mismo criterio que `myTasks` en el modo de equipo).
+   */
+  openTasks: {
+    id: number;
+    title: string;
+    clientName: string;
+    status: TaskStatus;
+    dueDate: string | null;
+  }[];
   /** Fecha de hoy en formato YYYY-MM-DD, para resolver fechas relativas. */
   today: string;
+  /**
+   * Nombre del miembro con `isOwner` activo (si existe): lo llena la capa
+   * telegram en buildContext. El prompt instruye que la primera persona del
+   * dueño («yo», «a mí», «asígnamelo», «mis pendientes», «mío») resuelve a
+   * este nombre en memberNames/memberName.
+   */
+  ownerMemberName?: string;
 }
 
 /**
@@ -34,6 +55,13 @@ export interface AiContext {
  * tras crear el pendiente el bot ejecuta la asignación con la misma lógica
  * de negocio (si falta `dueDate`, crea el pendiente y pregunta la fecha
  * para completar la asignación).
+ *
+ * Las operaciones sobre un pendiente EXISTENTE (`asignar`, `reasignar`,
+ * `extender`, `terminar`, `cambiar_estado`, `comentar`) aceptan `taskId`
+ * (número explícito) o `taskRef` (título en texto libre): la capa telegram
+ * resuelve `taskRef` por fuzzy matching sobre los pendientes abiertos con
+ * confirmación, igual que el modo de equipo. Nunca se pide el ID como única
+ * vía.
  */
 export type AiIntent =
   | {
@@ -47,31 +75,40 @@ export type AiIntent =
   | {
       operation: 'asignar';
       taskId?: number;
+      taskRef?: string;
       memberNames?: string[];
       dueDate?: string; // YYYY-MM-DD
     }
   | {
       operation: 'reasignar';
       taskId?: number;
+      taskRef?: string;
       memberNames?: string[];
       reason?: string;
     }
   | {
       operation: 'extender';
       taskId?: number;
+      taskRef?: string;
       newDueDate?: string; // YYYY-MM-DD
       reason?: string;
     }
-  | { operation: 'terminar'; taskId?: number }
+  | { operation: 'terminar'; taskId?: number; taskRef?: string }
   | {
       operation: 'cambiar_estado';
       taskId?: number;
+      taskRef?: string;
       status?: TaskStatus;
       reason?: string;
     }
   /** Comentario del dueño sobre un pendiente; taskRef = título en texto libre. */
   | { operation: 'comentar'; taskId?: number; taskRef?: string; message?: string }
-  | { operation: 'listar_pendientes'; clientName?: string }
+  /**
+   * `memberName` filtra por persona asignada («¿qué pendientes tiene
+   * Andrea?», «¿qué pendientes tengo yo?» → ownerMemberName). Combinable
+   * con `clientName` (AND).
+   */
+  | { operation: 'listar_pendientes'; clientName?: string; memberName?: string }
   | { operation: 'listar_clientes' }
   | { operation: 'listar_personas' }
   | { operation: 'ayuda' }

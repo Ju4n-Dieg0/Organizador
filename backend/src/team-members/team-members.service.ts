@@ -27,6 +27,7 @@ export interface TeamMemberInternal {
   name: string;
   active: boolean;
   telegramChatId: string | null;
+  isOwner: boolean;
 }
 
 @Injectable()
@@ -61,6 +62,7 @@ export class TeamMembersService {
       name: m.name,
       active: m.active,
       telegramChatId: m.telegramChatId,
+      isOwner: m.isOwner,
     }));
   }
 
@@ -92,6 +94,16 @@ export class TeamMembersService {
   async activate(id: number): Promise<TeamMemberResponseDto> {
     await this.findOne(id);
     const member = await this.teamMembersRepository.setActive(id, true);
+    return TeamMembersMapper.toResponse(member);
+  }
+
+  /**
+   * Marca/desmarca este miembro como el dueño. Solo puede haber UNO en true:
+   * al marcar, el repository desmarca al anterior en la misma transacción.
+   */
+  async setOwner(id: number, isOwner: boolean): Promise<TeamMemberResponseDto> {
+    await this.findOne(id);
+    const member = await this.teamMembersRepository.setOwner(id, isOwner);
     return TeamMembersMapper.toResponse(member);
   }
 

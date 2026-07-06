@@ -2,6 +2,8 @@ export interface TeamMemberResponse {
   id: number;
   name: string;
   active: boolean;
+  /** Es el dueño (máximo un miembro en true). */
+  isOwner: boolean;
   activeTaskCount: number;
   /** Tiene chat de Telegram vinculado (el chatId crudo nunca se expone). */
   telegramLinked: boolean;

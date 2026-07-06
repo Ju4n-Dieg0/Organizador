@@ -18,6 +18,8 @@ import {
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
+  UserDeleteOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { PageTransition } from '../components/common/PageTransition';
 import { PageHeader } from '../components/common/PageHeader';
@@ -30,6 +32,7 @@ import {
   useActivateTeamMember,
   useDeactivateTeamMember,
   useGenerateTelegramLink,
+  useSetTeamMemberOwner,
   useTeamMembers,
   useUnlinkTelegram,
 } from '../hooks/useTeam';
@@ -87,6 +90,7 @@ export function TeamPage() {
   const activateMember = useActivateTeamMember();
   const generateLink = useGenerateTelegramLink();
   const unlinkTelegram = useUnlinkTelegram();
+  const setOwner = useSetTeamMemberOwner();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMemberResponse | null>(null);
   const [linkModal, setLinkModal] = useState<LinkModalState | null>(null);
@@ -113,8 +117,16 @@ export function TeamPage() {
       dataIndex: 'name',
       key: 'name',
       ellipsis: true,
-      render: (name: string) => (
-        <Typography.Text style={{ fontWeight: 500 }}>{name}</Typography.Text>
+      render: (name: string, member) => (
+        <Space size={8}>
+          <Typography.Text style={{ fontWeight: 500 }}>{name}</Typography.Text>
+          {member.isOwner && (
+            <TagPill color={colors.accent} size="sm">
+              <UserOutlined style={{ marginRight: 4 }} aria-hidden />
+              Tú
+            </TagPill>
+          )}
+        </Space>
       ),
     },
     {
@@ -145,10 +157,12 @@ export function TeamPage() {
     {
       title: 'Acciones',
       key: 'actions',
-      width: 170,
+      width: 210,
       render: (_, member) => {
         const isGeneratingThis =
           generateLink.isPending && generateLink.variables === member.id;
+        const isSettingOwnerThis =
+          setOwner.isPending && setOwner.variables?.id === member.id;
         return (
           <Space size={2}>
             <Tooltip title="Editar">
@@ -159,6 +173,41 @@ export function TeamPage() {
                 onClick={() => openEdit(member)}
               />
             </Tooltip>
+            {member.isOwner ? (
+              <Popconfirm
+                title="No soy yo"
+                description={`¿Quitar la marca «Tú» de ${member.name}?`}
+                okText="Sí, quitar"
+                cancelText="Cancelar"
+                onConfirm={() => setOwner.mutate({ id: member.id, isOwner: false })}
+              >
+                <Tooltip title="No soy yo">
+                  <Button
+                    type="text"
+                    icon={<UserDeleteOutlined />}
+                    loading={isSettingOwnerThis}
+                    aria-label={`Quitar la marca de dueño a ${member.name}`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            ) : (
+              <Popconfirm
+                title="Este soy yo"
+                description={`¿Marcar a ${member.name} como tú? Si otra persona estaba marcada, dejará de estarlo.`}
+                okText="Sí, soy yo"
+                cancelText="Cancelar"
+                onConfirm={() => setOwner.mutate({ id: member.id, isOwner: true })}
+              >
+                <Tooltip title="Este soy yo">
+                  <Button
+                    type="text"
+                    icon={<UserOutlined />}
+                    loading={isSettingOwnerThis}
+                    aria-label={`Marcar a ${member.name} como dueño`}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            )}
             {member.telegramLinked ? (
               <Popconfirm
                 title="Desvincular Telegram"
@@ -288,7 +337,7 @@ export function TeamPage() {
               />
             ),
           }}
-          scroll={{ x: 760 }}
+          scroll={{ x: 800 }}
         />
       </GlassCard>
 

@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { CreateTeamMemberDto } from './dto/create-team-member.dto';
 import { QueryTeamMembersDto } from './dto/query-team-members.dto';
+import { SetOwnerDto } from './dto/set-owner.dto';
 import { TeamMemberResponseDto } from './dto/team-member-response.dto';
 import { TelegramLinkResponseDto } from './dto/telegram-link-response.dto';
 import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
@@ -60,6 +61,14 @@ export class TeamMembersController {
     @Param('id', ParseIntPipe) id: number,
   ): Promise<TeamMemberResponseDto> {
     return this.teamMembersService.activate(id);
+  }
+
+  @Patch(':id/owner')
+  setOwner(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetOwnerDto,
+  ): Promise<TeamMemberResponseDto> {
+    return this.teamMembersService.setOwner(id, dto.isOwner);
   }
 
   @Post(':id/telegram-link')

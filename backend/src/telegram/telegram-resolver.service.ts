@@ -53,9 +53,20 @@ function levenshtein(a: string, b: string): number {
   return prev[n];
 }
 
+/** Longitud del prefijo común de dos strings. */
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a[i] === b[i]) i += 1;
+  return i;
+}
+
 /**
  * Mejor distancia del query contra el nombre completo o cualquiera de sus
  * palabras, con umbral ≤ 2 (≤ 1 si el candidato tiene ≤ 5 caracteres).
+ * Variantes morfológicas con prefijo común casi total («jabones artesanales»
+ * vs «jabones artesano») cuentan como distancia 2: terminan en `suggestion`
+ * (siempre con confirmación del usuario, nunca silenciosas).
  * Devuelve null si ningún candidato queda dentro del umbral.
  */
 function fuzzyDistance(query: string, normalizedName: string): number | null {
@@ -64,7 +75,13 @@ function fuzzyDistance(query: string, normalizedName: string): number | null {
   for (const candidate of candidates) {
     if (!candidate) continue;
     const limit = candidate.length <= 5 ? 1 : 2;
-    const distance = levenshtein(query, candidate);
+    let distance = levenshtein(query, candidate);
+    if (distance > limit) {
+      const prefix = commonPrefixLength(query, candidate);
+      if (prefix >= Math.max(5, Math.min(query.length, candidate.length) - 2)) {
+        distance = 2;
+      }
+    }
     if (distance <= limit && (best === null || distance < best)) {
       best = distance;
     }

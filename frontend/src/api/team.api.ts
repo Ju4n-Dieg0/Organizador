@@ -51,6 +51,14 @@ export const teamApi = {
     return res.data;
   },
 
+  setOwner: async (id: number, isOwner: boolean): Promise<TeamMemberResponse> => {
+    const res = await http.patch<TeamMemberResponse>(
+      `${API_PATHS.teamMembers}/${id}/owner`,
+      { isOwner },
+    );
+    return res.data;
+  },
+
   generateTelegramLink: async (id: number): Promise<TelegramLinkResponse> => {
     const res = await http.post<TelegramLinkResponse>(
       `${API_PATHS.teamMembers}/${id}/telegram-link`,

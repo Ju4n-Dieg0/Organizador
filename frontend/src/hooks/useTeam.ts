@@ -77,6 +77,30 @@ export function useActivateTeamMember() {
 }
 
 /**
+ * Marca o desmarca a un miembro como dueño. El backend garantiza que
+ * haya como máximo uno: marcar a alguien desmarca automáticamente al anterior.
+ */
+export function useSetTeamMemberOwner() {
+  const queryClient = useQueryClient();
+  const { message } = App.useApp();
+  return useMutation({
+    mutationFn: ({ id, isOwner }: { id: number; isOwner: boolean }) =>
+      teamApi.setOwner(id, isOwner),
+    onSuccess: (_member, { isOwner }) => {
+      queryClient.invalidateQueries({ queryKey: TEAM_KEY });
+      message.success(
+        isOwner ? 'Persona marcada como tú' : 'Marca de dueño quitada',
+      );
+    },
+    onError: (error: unknown) => {
+      message.error(
+        getApiErrorMessage(error, 'No se pudo actualizar la marca de dueño'),
+      );
+    },
+  });
+}
+
+/**
  * Genera (o regenera) el enlace de vinculación de Telegram de un miembro.
  * No muestra toast de éxito: el enlace se presenta en un modal desde la página.
  * El error (p. ej. 503 si el bot no está configurado) muestra el mensaje del backend.

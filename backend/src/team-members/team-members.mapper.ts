@@ -10,6 +10,7 @@ export class TeamMembersMapper {
       name: member.name,
       active: member.active,
       activeTaskCount: member._count.assignments,
+      isOwner: member.isOwner,
       telegramLinked: !!member.telegramChatId,
       telegramLinkPending: pending,
       telegramLinkExpiresAt: pending

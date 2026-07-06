@@ -73,6 +73,32 @@ export class TeamMembersRepository {
     });
   }
 
+  /**
+   * Marca/desmarca el dueño. Si `isOwner` es true, desmarca al anterior y
+   * marca a este miembro en UNA transacción (solo puede haber uno en true).
+   */
+  async setOwner(id: number, isOwner: boolean): Promise<TeamMemberWithCount> {
+    if (!isOwner) {
+      return this.prisma.teamMember.update({
+        where: { id },
+        data: { isOwner: false },
+        include: memberInclude,
+      });
+    }
+    const [, member] = await this.prisma.$transaction([
+      this.prisma.teamMember.updateMany({
+        where: { isOwner: true, id: { not: id } },
+        data: { isOwner: false },
+      }),
+      this.prisma.teamMember.update({
+        where: { id },
+        data: { isOwner: true },
+        include: memberInclude,
+      }),
+    ]);
+    return member;
+  }
+
   upsertLinkToken(
     memberId: number,
     token: string,

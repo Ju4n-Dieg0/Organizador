@@ -3,6 +3,8 @@ export class TeamMemberResponseDto {
   name: string;
   active: boolean;
   activeTaskCount: number;
+  /** Este miembro es el dueño (máximo uno en true). */
+  isOwner: boolean;
   /** Tiene telegramChatId guardado (el chatId crudo NUNCA se expone). */
   telegramLinked: boolean;
   /** Hay un token de vinculación vigente sin usar. */
